@@ -9,7 +9,9 @@ project_name: crossplane-mcp
 
 before:
   hooks:
-    - go mod tidy
+    # download (not tidy) so a release build on the tagged commit can't dirty
+    # go.mod/go.sum and fail `release --clean`.
+    - go mod download
 
 builds:
   - id: crossplane-mcp
@@ -42,17 +44,9 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# release-please owns the changelog (CHANGELOG.md) and the GitHub release notes.
 changelog:
-  sort: asc
-  use: github
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - "Merge pull request"
-      - "Merge branch"
+  disable: true
 
 homebrew_casks:
   - name: crossplane-mcp
@@ -76,4 +70,8 @@ homebrew_casks:
           end
 
 release:
-  prerelease: auto
+  # release-please has already created the GitHub release for the tag; just
+  # upload the binaries/checksums to it without touching its notes.
+  # (prerelease is left to release-please, so GoReleaser's prerelease:auto is
+  # omitted — keep-existing would not change an existing release's flag anyway.)
+  mode: keep-existing

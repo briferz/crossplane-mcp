@@ -1,25 +1,67 @@
 name: Release
 
+# Automated SemVer with release-please:
+#   1. Merging Conventional-Commit PRs to main makes release-please open/update a
+#      "chore(release): X.Y.Z" PR with an updated CHANGELOG and version bump.
+#   2. Merging that PR creates the tag + GitHub release, which gates the
+#      GoReleaser and container jobs below (they run in this same workflow
+#      because a tag created with GITHUB_TOKEN does not trigger a separate
+#      tag-push workflow).
+#
+# Recovery: if the artifact jobs fail after the release was created, either
+# "Re-run failed jobs" on that run (outputs are preserved), or trigger this
+# workflow manually (workflow_dispatch) with the existing tag to rebuild and
+# re-publish artifacts for it.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build & publish artifacts for, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # Cross-platform binaries, checksums, GitHub release notes, and the Homebrew
-  # formula. Requires a HOMEBREW_TAP_TOKEN secret (a PAT with write access to
-  # the briferz/homebrew-tap repo); see README "Releasing".
-  goreleaser:
-    name: binaries & homebrew
+  release-please:
+    name: release-please
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  goreleaser:
+    name: binaries & homebrew
+    needs: release-please
+    # Run when release-please cut a release (push), or on a manual rebuild.
+    # !cancelled() lets this evaluate even though release-please is skipped on
+    # workflow_dispatch. On a normal push with no release, this is false.
+    if: ${{ !cancelled() && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
@@ -32,17 +74,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # The workflow runs on push-to-main (GITHUB_REF=refs/heads/main), so
+          # tell GoReleaser the tag explicitly instead of relying on ref detection.
+          GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
 
-  # Multi-arch container image to GitHub Container Registry. Uses the built-in
-  # GITHUB_TOKEN (packages: write) — no extra secret needed.
   container:
     name: container image
+    needs: release-please
+    if: ${{ !cancelled() && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -54,10 +103,13 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
+          # There is no tag ref on a push-to-main / workflow_dispatch event, so
+          # feed the tag explicitly for semver parsing. The bare {{major}} tag is
+          # omitted pre-1.0 (it would publish a misleading ":0" that floats
+          # across breaking 0.x minors).
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
             type=sha
       - uses: docker/build-push-action@v7
         with:
@@ -66,7 +118,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Use the metadata-action version (v-stripped, e.g. 0.1.0) so the
+          # container binary's --version matches the GoReleaser-built binaries.
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

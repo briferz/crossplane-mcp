@@ -42,11 +42,14 @@ See [DESIGN.md](./DESIGN.md) for the full rationale and roadmap.
 
 ## Install
 
-**Homebrew**
+**Homebrew** (distributed as a cask)
 
 ```sh
-brew install briferz/tap/crossplane-mcp
+brew install --cask briferz/tap/crossplane-mcp
 ```
+
+> The macOS binaries are unsigned; the cask strips the `com.apple.quarantine`
+> attribute on install so it runs without a Gatekeeper prompt.
 
 **Container image** (GitHub Container Registry)
 
@@ -117,23 +120,34 @@ push and PR via [GitHub Actions](./.github/workflows/ci.yml).
 
 ## Releasing
 
-Tagging `vX.Y.Z` triggers the [release workflow](./.github/workflows/release.yml),
-which publishes cross-platform binaries + checksums, the Homebrew formula, and a
-multi-arch container image to `ghcr.io`.
+Releases are automated with [release-please](https://github.com/googleapis/release-please)
+driven by [Conventional Commits](https://www.conventionalcommits.org/) — no manual
+tagging.
 
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
+1. Merge `feat:` / `fix:` PRs to `main` as usual.
+2. release-please opens (and keeps updating) a **release PR** titled
+   `chore(release): X.Y.Z` with the next version and an updated `CHANGELOG.md`.
+3. **Merge that release PR** to cut the release: release-please creates the
+   `vX.Y.Z` tag and GitHub release, then [GoReleaser](./.github/workflows/release.yml)
+   attaches cross-platform binaries + checksums and publishes the Homebrew cask,
+   and a multi-arch container image is pushed to `ghcr.io`.
+
+Versioning is pre-1.0 (`0.x`): `feat:` and breaking changes bump the **minor**,
+`fix:` bumps the **patch**. This is configured in
+[`release-please-config.json`](./release-please-config.json); the current version
+is tracked in [`.release-please-manifest.json`](./.release-please-manifest.json).
 
 One-time prerequisites:
 
 - **Homebrew tap:** create a public `briferz/homebrew-tap` repository, and add a
   repo secret `HOMEBREW_TAP_TOKEN` (a PAT with write access to it) so GoReleaser
-  can push the formula.
+  can push the cask.
 - **Container registry:** the image publishes via the built-in `GITHUB_TOKEN`;
   make the `ghcr.io` package public in the repo's package settings if you want
   unauthenticated pulls.
+- **Allow release-please:** in repo Settings → Actions → General, enable
+  "Allow GitHub Actions to create and approve pull requests" so it can open the
+  release PR.
 
 ## Contributing
 
