@@ -22,6 +22,8 @@ func main() {
 	var (
 		kubeconfig  = flag.String("kubeconfig", "", "path to kubeconfig (defaults to KUBECONFIG / ~/.kube/config; in-cluster if absent)")
 		kubeContext = flag.String("context", "", "kubeconfig context to use (defaults to current-context)")
+		logFile     = flag.String("log-file", "", "append a JSONL record of each tool call (input+output) to this path, or '-' for stderr; also via CROSSPLANE_MCP_LOG_FILE")
+		logRedact   = flag.Bool("log-redact", true, "mask scalar values under sensitive keys (password/token/secret/…) in the log; also via CROSSPLANE_MCP_LOG_REDACT=false")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -29,6 +31,26 @@ func main() {
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+
+	// Optional tool-call recording (flag wins over env).
+	logDest := *logFile
+	if logDest == "" {
+		logDest = os.Getenv("CROSSPLANE_MCP_LOG_FILE")
+	}
+	var rec *tools.Recorder
+	if logDest != "" {
+		redact := *logRedact
+		if v := os.Getenv("CROSSPLANE_MCP_LOG_REDACT"); v == "false" || v == "0" {
+			redact = false
+		}
+		r, err := tools.NewRecorder(logDest, redact)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "crossplane-mcp: open log file: %v\n", err)
+			os.Exit(1)
+		}
+		rec = r
+		defer func() { _ = rec.Close() }()
 	}
 
 	cl, err := k8s.New(*kubeconfig, *kubeContext)
@@ -41,7 +63,7 @@ func main() {
 		Name:    "crossplane-mcp",
 		Version: version,
 	}, nil)
-	tools.Register(server, cl)
+	tools.Register(server, cl, rec)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintf(os.Stderr, "crossplane-mcp: %v\n", err)

@@ -116,7 +116,40 @@ with `AccessDenied: invalid credentials`) instead of the unhelpful top-level
 |---|---|---|
 | `--kubeconfig` | `$KUBECONFIG` / `~/.kube/config` | Path to kubeconfig. |
 | `--context` | current-context | Kubeconfig context to use. |
+| `--log-file` | | Append a JSONL record of each tool call to this path (or `-` for stderr). Also via `CROSSPLANE_MCP_LOG_FILE`. |
 | `--version` | | Print version and exit. |
+
+## Capturing tool calls
+
+To inspect what the server saw and returned — useful for debugging, sharing a
+case, or tuning — set a log file (handy when you can't pass flags through your
+MCP client):
+
+```sh
+export CROSSPLANE_MCP_LOG_FILE=~/crossplane-mcp.jsonl
+crossplane-mcp --context my-cluster
+```
+
+The path expands a leading `~` and `$VARS` itself, so the same value works
+whether set via a shell or an MCP client's JSON config (which has no shell to
+expand them); an absolute path always works.
+
+Each tool call appends one JSON line: `{time, tool, durationMs, input, output, error}`.
+The file is created `0600`. Logging goes only to the file/stderr — never stdout,
+which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
+may interleave with other process output; use a file for clean JSONL.)
+
+By default, scalar values under sensitive keys (`password`, `token`, `secret`,
+`credential`, `apikey`, `accesskey`, `privatekey`, `connection`, `dsn`, …) are
+**masked** as `[redacted]` — so inline credentials in a resource `spec` aren't
+written verbatim. Reference structures (e.g. a `secretRef`'s name) are kept.
+Disable masking with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
+
+> **Sensitivity:** masking is **heuristic and key-based** — it can miss a secret
+> stored under an unexpected key, and it does not scrub provider *error* text
+> (which may contain identifiers like account IDs or ARNs). The server never
+> reads Kubernetes Secret objects. Treat the log as potentially sensitive and
+> **review it before sharing off a machine that touches production.**
 
 ## Development
 
