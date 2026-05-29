@@ -14,8 +14,9 @@ import (
 	"github.com/briferz/crossplane-mcp/internal/xp"
 )
 
-// Register adds every diagnostic tool to the server.
-func Register(s *mcp.Server, cl *k8s.Client) {
+// Register adds every diagnostic tool to the server. If rec is non-nil, each
+// tool call's input/output is appended to it for later inspection.
+func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "diagnose",
 		Description: "Diagnose a stuck Crossplane resource. Walks the composite (XR) → managed " +
@@ -23,25 +24,25 @@ func Register(s *mcp.Server, cl *k8s.Client) {
 			"Healthy condition, and ranks them so the deepest (most likely root cause) comes first " +
 			"with full, untruncated condition messages and recent events. Use this first when " +
 			"something is not becoming Ready.",
-	}, diagnoseHandler(cl))
+	}, recorded(rec, "diagnose", diagnoseHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "get_resource_tree",
 		Description: "Return the Crossplane composition tree (Claim/XR → composed/managed resources) " +
 			"rooted at the given resource, with each node's Ready/Synced/Healthy state. Structured " +
 			"equivalent of `crossplane resource trace`, as JSON.",
-	}, treeHandler(cl))
+	}, recorded(rec, "get_resource_tree", treeHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "get_resource",
 		Description: "Fetch a single Kubernetes/Crossplane resource, pruned to its status conditions, " +
 			"recent events, and spec (noisy fields like managedFields removed).",
-	}, getResourceHandler(cl))
+	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_contexts",
 		Description: "List the available kubeconfig contexts (empty when running in-cluster).",
-	}, contextsHandler(cl))
+	}, recorded(rec, "list_contexts", contextsHandler(cl)))
 }
 
 // --- diagnose ---

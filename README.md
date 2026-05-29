@@ -116,7 +116,29 @@ with `AccessDenied: invalid credentials`) instead of the unhelpful top-level
 |---|---|---|
 | `--kubeconfig` | `$KUBECONFIG` / `~/.kube/config` | Path to kubeconfig. |
 | `--context` | current-context | Kubeconfig context to use. |
+| `--log-file` | | Append a JSONL record of each tool call to this path (or `-` for stderr). Also via `CROSSPLANE_MCP_LOG_FILE`. |
 | `--version` | | Print version and exit. |
+
+## Capturing tool calls
+
+To inspect what the server saw and returned — useful for debugging, sharing a
+case, or tuning — set a log file (handy when you can't pass flags through your
+MCP client):
+
+```sh
+export CROSSPLANE_MCP_LOG_FILE=~/crossplane-mcp.jsonl
+crossplane-mcp --context my-cluster
+```
+
+Each tool call appends one JSON line: `{time, tool, durationMs, input, output, error}`.
+The file is created `0600`. Logging goes only to the file/stderr — never stdout,
+which is the MCP protocol channel.
+
+> **Sensitivity:** records contain cluster *metadata* — resource names,
+> namespaces, conditions, events, and provider error messages (which on real
+> clusters can include identifiers like account IDs or ARNs). Secret *contents*
+> are never captured (the server doesn't read them). **Review the file before
+> sharing it off a machine that touches production.**
 
 ## Development
 
