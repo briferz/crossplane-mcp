@@ -25,6 +25,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
@@ -82,11 +83,12 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           # On a push-to-main event there is no tag ref, so feed the
-          # release-please tag explicitly for semver parsing.
+          # release-please tag explicitly for semver parsing. The bare
+          # {{major}} tag is omitted pre-1.0 (it would publish a misleading
+          # ":0" that floats across breaking 0.x minors).
           tags: |
             type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
             type=sha
       - uses: docker/build-push-action@v7
         with:
@@ -95,7 +97,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Use the metadata-action version (v-stripped, e.g. 0.1.0) so the
+          # container binary's --version matches the GoReleaser-built binaries.
           build-args: |
-            VERSION=${{ needs.release-please.outputs.tag_name }}
+            VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

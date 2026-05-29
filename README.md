@@ -42,11 +42,14 @@ See [DESIGN.md](./DESIGN.md) for the full rationale and roadmap.
 
 ## Install
 
-**Homebrew**
+**Homebrew** (distributed as a cask)
 
 ```sh
-brew install briferz/tap/crossplane-mcp
+brew install --cask briferz/tap/crossplane-mcp
 ```
+
+> The macOS binaries are unsigned; the cask strips the `com.apple.quarantine`
+> attribute on install so it runs without a Gatekeeper prompt.
 
 **Container image** (GitHub Container Registry)
 
