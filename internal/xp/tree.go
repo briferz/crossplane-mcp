@@ -92,9 +92,17 @@ type ref struct {
 // Composed resources that are themselves composites recurse naturally.
 func BuildTree(ctx context.Context, cl *k8s.Client, root *unstructured.Unstructured) (*Node, Stats) {
 	st := &Stats{}
-	visited := map[string]bool{}
+	// Seed visited with the root so a child that references back to it is not
+	// re-fetched and re-expanded as its own subtree.
+	visited := map[string]bool{
+		refKey(root.GetAPIVersion(), root.GetKind(), root.GetNamespace(), root.GetName()): true,
+	}
 	node := build(ctx, cl, root, 0, visited, st)
 	return node, *st
+}
+
+func refKey(apiVersion, kind, namespace, name string) string {
+	return apiVersion + "/" + kind + "/" + namespace + "/" + name
 }
 
 func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, depth int, visited map[string]bool, st *Stats) *Node {
@@ -119,10 +127,14 @@ func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, 
 	}
 
 	for _, r := range childRefs(obj) {
+		if st.Nodes >= maxNodes {
+			st.Capped = true
+			break
+		}
 		if r.name == "" || r.kind == "" {
 			continue
 		}
-		key := r.apiVersion + "/" + r.kind + "/" + r.namespace + "/" + r.name
+		key := refKey(r.apiVersion, r.kind, r.namespace, r.name)
 		if visited[key] {
 			continue
 		}

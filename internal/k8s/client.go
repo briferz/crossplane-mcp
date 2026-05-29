@@ -140,6 +140,11 @@ func (c *Client) resolveByKind(kind string) (Target, error) {
 
 	switch len(matches) {
 	case 0:
+		if err != nil {
+			// Discovery returned a partial list with an error; surface it so a
+			// missing kind caused by a degraded API group is diagnosable.
+			return Target{}, fmt.Errorf("no resource found for kind %q (discovery error: %w)", kind, err)
+		}
 		return Target{}, fmt.Errorf("no resource found for kind %q", kind)
 	case 1:
 		return matches[0], nil
@@ -154,13 +159,15 @@ func (c *Client) resolveByKind(kind string) (Target, error) {
 	}
 }
 
-// Get fetches a single resource. For namespaced kinds an empty namespace
-// defaults to "default".
+// Get fetches a single resource. A namespaced kind requires a namespace —
+// rather than silently defaulting to "default" (which would mask the real
+// resource and return a confusing not-found), it returns an explicit error so
+// the caller can supply one.
 func (c *Client) Get(ctx context.Context, t Target, namespace, name string) (*unstructured.Unstructured, error) {
 	ri := c.Dyn.Resource(t.GVR)
 	if t.Namespaced {
 		if namespace == "" {
-			namespace = "default"
+			return nil, fmt.Errorf("namespace is required for namespaced kind %q", t.Kind)
 		}
 		return ri.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	}
@@ -178,13 +185,22 @@ type Event struct {
 
 var eventsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}
 
-// Events returns recent events for the object with the given uid, newest last,
-// capped at limit.
-func (c *Client) Events(ctx context.Context, uid string, limit int) ([]Event, error) {
+// Events returns recent events for the object with the given uid, sorted oldest
+// to newest and capped at limit (keeping the newest).
+//
+// The query is scoped to namespace to stay within a namespace-scoped read-only
+// role rather than requiring cluster-wide list access on events. Events for
+// cluster-scoped objects (empty namespace) are recorded in "default" by the
+// Kubernetes event recorder, so that is queried instead.
+func (c *Client) Events(ctx context.Context, namespace, uid string, limit int) ([]Event, error) {
 	if uid == "" {
 		return nil, nil
 	}
-	list, err := c.Dyn.Resource(eventsGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+	ns := namespace
+	if ns == "" {
+		ns = metav1.NamespaceDefault
+	}
+	list, err := c.Dyn.Resource(eventsGVR).Namespace(ns).List(ctx, metav1.ListOptions{
 		FieldSelector: "involvedObject.uid=" + uid,
 	})
 	if err != nil {
@@ -202,6 +218,8 @@ func (c *Client) Events(ctx context.Context, uid string, limit int) ([]Event, er
 			Last:    firstNonEmpty(nestedString(m, "lastTimestamp"), nestedString(m, "eventTime")),
 		})
 	}
+	// RFC3339 timestamps sort lexicographically in chronological order.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Last < out[j].Last })
 	if limit > 0 && len(out) > limit {
 		out = out[len(out)-limit:]
 	}

@@ -131,7 +131,7 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 			Conditions: conds,
 			Spec:       spec,
 		}
-		if ev, err := cl.Events(ctx, string(obj.GetUID()), 10); err == nil {
+		if ev, err := cl.Events(ctx, obj.GetNamespace(), string(obj.GetUID()), 10); err == nil {
 			view.Events = ev
 		}
 		return nil, view, nil

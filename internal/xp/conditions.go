@@ -34,6 +34,9 @@ const (
 
 // Conditions extracts the status conditions from an unstructured object.
 func Conditions(obj *unstructured.Unstructured) []Condition {
+	if obj == nil {
+		return nil
+	}
 	raw, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if !found || err != nil {
 		return nil
@@ -102,20 +105,28 @@ func Classify(cs []Condition) (Health, string) {
 }
 
 // blockingMessages returns the reason/message text of any condition that is
-// False — the lines a human would read first.
+// False (or Unknown with detail) — the lines a human would read first. Unknown
+// conditions are included so resources stuck Pending still report why.
 func blockingMessages(cs []Condition) []string {
 	var msgs []string
 	for _, c := range cs {
-		if c.Status != "False" {
+		if c.Status != "False" && c.Status != "Unknown" {
 			continue
+		}
+		if c.Status == "Unknown" && c.Message == "" && c.Reason == "" {
+			continue
+		}
+		label := c.Type
+		if c.Status == "Unknown" {
+			label += " [Unknown]"
 		}
 		switch {
 		case c.Message != "" && c.Reason != "":
-			msgs = append(msgs, c.Type+": "+c.Reason+" — "+c.Message)
+			msgs = append(msgs, label+": "+c.Reason+" — "+c.Message)
 		case c.Message != "":
-			msgs = append(msgs, c.Type+": "+c.Message)
+			msgs = append(msgs, label+": "+c.Message)
 		case c.Reason != "":
-			msgs = append(msgs, c.Type+": "+c.Reason)
+			msgs = append(msgs, label+": "+c.Reason)
 		}
 	}
 	return msgs

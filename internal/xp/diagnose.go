@@ -11,10 +11,10 @@ import (
 // maxSuspects caps how many blocking resources we fetch events for and return.
 const maxSuspects = 10
 
-// EventFetcher supplies recent events for a resource by uid. *k8s.Client
-// satisfies it; tests use a stub.
+// EventFetcher supplies recent events for a resource by namespace+uid.
+// *k8s.Client satisfies it; tests use a stub.
 type EventFetcher interface {
-	Events(ctx context.Context, uid string, limit int) ([]k8s.Event, error)
+	Events(ctx context.Context, namespace, uid string, limit int) ([]k8s.Event, error)
 }
 
 // Suspect is a resource flagged as a likely cause of a problem.
@@ -43,28 +43,46 @@ type Diagnosis struct {
 // flat trace, which leaves the user to spot the blocker themselves. Events are
 // fetched only for the top suspects, keeping the response token-light.
 func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, includeTree bool) *Diagnosis {
-	var blocked []*Node
+	// Collect every non-Ready node, not just Blocked ones: a resource stuck
+	// Pending (Unknown/absent conditions) is still a problem and must not be
+	// reported as healthy.
+	var suspects []*Node
 	walk(tree, func(n *Node) {
-		if n.State == StateBlocked {
-			blocked = append(blocked, n)
+		if n.State != StateReady {
+			suspects = append(suspects, n)
 		}
 	})
 
-	// Deepest first: a leaf managed resource failing is a more actionable root
-	// cause than the composite that merely propagates Ready:False upward.
-	sort.SliceStable(blocked, func(i, j int) bool { return blocked[i].depth > blocked[j].depth })
+	// Rank: Blocked (a failing condition) before Pending, then deepest first —
+	// a leaf managed resource failing is a more actionable root cause than the
+	// composite that merely propagates the problem upward.
+	sort.SliceStable(suspects, func(i, j int) bool {
+		if suspects[i].State != suspects[j].State {
+			return suspects[i].State == StateBlocked
+		}
+		return suspects[i].depth > suspects[j].depth
+	})
 
-	d := &Diagnosis{Healthy: len(blocked) == 0, Stats: stats}
+	d := &Diagnosis{Healthy: len(suspects) == 0, Stats: stats}
 	if includeTree {
 		d.Tree = tree.Flatten()
 	}
 
 	if d.Healthy {
-		d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready/Synced; no blocking conditions found.", stats.Nodes)
+		d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
 		return d
 	}
 
-	for i, n := range blocked {
+	var blocked, pending int
+	for _, n := range suspects {
+		if n.State == StateBlocked {
+			blocked++
+		} else {
+			pending++
+		}
+	}
+
+	for i, n := range suspects {
 		if i >= maxSuspects {
 			break
 		}
@@ -78,16 +96,16 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			Reasons:    blockingMessages(n.Conditions),
 		}
 		if ev != nil {
-			if events, err := ev.Events(ctx, n.uid, 5); err == nil {
+			if events, err := ev.Events(ctx, n.Namespace, n.uid, 5); err == nil {
 				s.Events = events
 			}
 		}
 		d.Suspects = append(d.Suspects, s)
 	}
 
-	root := blocked[0]
-	d.Summary = fmt.Sprintf("%d blocking resource(s); likely root cause: %s/%s %q (depth %d).",
-		len(blocked), root.Kind, root.APIVersion, root.Name, root.depth)
+	root := suspects[0]
+	d.Summary = fmt.Sprintf("%d blocking, %d pending resource(s); likely root cause: %s %q (%s, depth %d).",
+		blocked, pending, root.Kind, root.Name, root.APIVersion, root.depth)
 	if msgs := blockingMessages(root.Conditions); len(msgs) > 0 {
 		d.Summary += " " + msgs[0]
 	}

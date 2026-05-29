@@ -11,7 +11,7 @@ import (
 // stubEvents is an EventFetcher that records uids it was asked about.
 type stubEvents struct{ asked []string }
 
-func (s *stubEvents) Events(_ context.Context, uid string, _ int) ([]k8s.Event, error) {
+func (s *stubEvents) Events(_ context.Context, _, uid string, _ int) ([]k8s.Event, error) {
 	s.asked = append(s.asked, uid)
 	return []k8s.Event{{Type: "Warning", Reason: "Stub", Message: "for " + uid}}, nil
 }
@@ -105,6 +105,39 @@ func TestDiagnoseHealthy(t *testing.T) {
 	}
 	if len(d.Suspects) != 0 {
 		t.Errorf("expected no suspects, got %d", len(d.Suspects))
+	}
+}
+
+// TestDiagnosePendingNotHealthy guards the fix for the bug where a resource
+// stuck Pending (Unknown/absent conditions) was reported as healthy because
+// only Blocked nodes were collected.
+func TestDiagnosePendingNotHealthy(t *testing.T) {
+	root := node(0, "App", "app",
+		[]Condition{cond("Ready", "Unknown", "Provisioning", "still reconciling")})
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if d.Healthy {
+		t.Fatalf("pending resource must not be reported healthy; summary: %s", d.Summary)
+	}
+	if len(d.Suspects) != 1 || d.Suspects[0].Kind != "App" {
+		t.Fatalf("expected the pending App as a suspect, got %+v", d.Suspects)
+	}
+	// The Unknown condition's detail should be surfaced.
+	if len(d.Suspects[0].Reasons) == 0 || !strings.Contains(d.Suspects[0].Reasons[0], "still reconciling") {
+		t.Errorf("expected Unknown condition message surfaced, got %v", d.Suspects[0].Reasons)
+	}
+}
+
+// TestDiagnoseBlockedRanksAbovePending confirms a deeper Pending node still
+// ranks below a shallower Blocked one.
+func TestDiagnoseBlockedRanksAbovePending(t *testing.T) {
+	deepPending := node(2, "Bucket", "b", []Condition{cond("Ready", "Unknown", "", "")})
+	blocked := node(1, "XStorage", "s", []Condition{cond("Synced", "False", "ApplyErr", "denied")}, deepPending)
+	root := node(0, "App", "a", []Condition{cond("Ready", "False", "Waiting", "")}, blocked)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
+	if d.Suspects[0].Kind != "XStorage" {
+		t.Errorf("expected Blocked XStorage ranked first over deeper Pending Bucket, got %s", d.Suspects[0].Kind)
 	}
 }
 
