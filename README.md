@@ -29,7 +29,19 @@ find the blocker. This server instead:
 - handles both **Crossplane v2** (namespaced XRs, no Claims) and v1 /
   LegacyCluster (Claims) trees.
 
-See [DESIGN.md](./DESIGN.md) for the full rationale and roadmap.
+See [DESIGN.md](./DESIGN.md) for the architecture and rationale.
+
+## Goals & Non-Goals
+
+A quick orientation — full detail and phased plan in [ROADMAP.md](./ROADMAP.md).
+
+**Goals:** read-only diagnosis of stuck Crossplane resources (root-cause ranking
+over Claim/XR→MR trees), Crossplane-aware for both v2 and v1/LegacyCluster,
+LLM-optimized output, safe to point at production, and discovery/schema tools.
+
+**Non-Goals:** it **never mutates the cluster** (no create/update/delete/apply or
+remediation — diagnose-and-advise only); it is **not** a composition-authoring
+tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 
 ## Tools
 

@@ -208,14 +208,11 @@ Large k8s objects wreck an LLM context. Defaults:
 
 ## 8. Roadmap
 
-- **Phase 1 — MVP (the differentiator):** Go module + official SDK + stdio,
-  kubeconfig auth, `get_resource`, `get_resource_tree`, `diagnose`. Beats
-  everything that currently exists.
-- **Phase 2:** `list_providers` / `list_functions`, `list_compositions` /
-  `describe_composition`, `explain_xrd` / `get_schema`, `list_contexts`.
-- **Phase 3:** live `--watch`-style diagnosis; optional integration with the
-  v2.2 **alpha** pipeline-inspector gRPC stream (treat as unstable; primary
-  path stays XR status + `FunctionRevision` conditions).
+The phased plan, plus the project's **goals and non-goals**, now live in
+[ROADMAP.md](./ROADMAP.md) (single source of truth, to avoid drift). In short:
+Phase 1 (diagnostics MVP) shipped in v0.1.x; Phase 2 is discovery & schema
+tools; Phase 3 is deeper diagnosis (live watch, function-pipeline insight,
+richer ranking).
 
 ---
 
