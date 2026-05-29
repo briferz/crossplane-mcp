@@ -1,0 +1,56 @@
+# Crossplane v2 XRD (namespaced scope) + a Composition that composes a single
+# NopResource pinned to Ready=False, producing the classic "composed resource
+# Synced but not Ready, XR stuck waiting" failure mode.
+---
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xstuckapps.example.org
+spec:
+  scope: Namespaced
+  group: example.org
+  names:
+    kind: XStuckApp
+    plural: xstuckapps
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                message:
+                  type: string
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xstuckapps.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: example.org/v1alpha1
+    kind: XStuckApp
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: stuck-nop
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: NopResource
+              spec:
+                forProvider:
+                  # Reconciles fine (Synced=True) but never becomes Ready.
+                  conditionAfter:
+                    - time: 0s
+                      conditionType: Ready
+                      conditionStatus: "False"
