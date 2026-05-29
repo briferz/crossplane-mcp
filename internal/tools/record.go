@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ func NewRecorder(dest string, redact bool) (*Recorder, error) {
 	if dest == "-" || dest == "stderr" {
 		return &Recorder{w: os.Stderr, redact: redact}, nil
 	}
+	dest = expandPath(dest)
 	// #nosec G304 -- dest is an operator-provided log path (flag/env), not attacker-controlled.
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-provided log path
 	if err != nil {
@@ -62,6 +64,26 @@ func (r *Recorder) Close() error {
 		return c.Close()
 	}
 	return nil
+}
+
+// expandPath resolves $VARS and a leading ~ in the log path, so it works the
+// same whether set via a shell (which would expand them itself) or via an MCP
+// client's JSON config (which has no shell, so the raw value reaches us). An
+// absolute path is always safe.
+func expandPath(p string) string {
+	p = os.ExpandEnv(p)
+	if p == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return p
+	}
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }
 
 type callRecord struct {

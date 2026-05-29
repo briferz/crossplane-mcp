@@ -130,6 +130,10 @@ export CROSSPLANE_MCP_LOG_FILE=~/crossplane-mcp.jsonl
 crossplane-mcp --context my-cluster
 ```
 
+The path expands a leading `~` and `$VARS` itself, so the same value works
+whether set via a shell or an MCP client's JSON config (which has no shell to
+expand them); an absolute path always works.
+
 Each tool call appends one JSON line: `{time, tool, durationMs, input, output, error}`.
 The file is created `0600`. Logging goes only to the file/stderr — never stdout,
 which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and

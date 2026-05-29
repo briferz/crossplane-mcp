@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -12,6 +14,27 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestExpandPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	t.Setenv("XPMCP_TMP", "/tmp/xpmcp")
+
+	cases := map[string]string{
+		"~/log.jsonl":         filepath.Join(home, "log.jsonl"),
+		"~":                   home,
+		"$XPMCP_TMP/a.jsonl":  "/tmp/xpmcp/a.jsonl",
+		"/abs/path.jsonl":     "/abs/path.jsonl",
+		"relative/path.jsonl": "relative/path.jsonl",
+	}
+	for in, want := range cases {
+		if got := expandPath(in); got != want {
+			t.Errorf("expandPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
 
 func TestRecorderRecord(t *testing.T) {
 	var buf bytes.Buffer
