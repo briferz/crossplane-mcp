@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/briferz/crossplane-mcp/compare/v0.1.1...v0.2.0) (2026-05-29)
+
+
+### Features
+
+* optional JSONL logging of tool calls (--log-file / CROSSPLANE_MCP_LOG_FILE) ([#21](https://github.com/briferz/crossplane-mcp/issues/21)) ([e85820e](https://github.com/briferz/crossplane-mcp/commit/e85820e0edbc008bac9bb660256cebea4f341c97))
+
 ## [0.1.1](https://github.com/briferz/crossplane-mcp/compare/v0.1.0...v0.1.1) (2026-05-29)
 
 
