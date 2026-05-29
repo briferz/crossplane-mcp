@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/briferz/crossplane-mcp/compare/v0.1.0...v0.1.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* walk v2 namespaced XR composed refs at spec.crossplane.resourceRefs ([#18](https://github.com/briferz/crossplane-mcp/issues/18)) ([3a86fec](https://github.com/briferz/crossplane-mcp/commit/3a86fec9e429bfde8b16ab971e65ab61b3fbf319))
+
 ## [0.1.0](https://github.com/briferz/crossplane-mcp/compare/v0.0.1...v0.1.0) (2026-05-29)
 
 
