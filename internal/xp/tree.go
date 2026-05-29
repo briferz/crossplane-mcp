@@ -2,6 +2,7 @@ package xp
 
 import (
 	"context"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -95,14 +96,27 @@ func BuildTree(ctx context.Context, cl *k8s.Client, root *unstructured.Unstructu
 	// Seed visited with the root so a child that references back to it is not
 	// re-fetched and re-expanded as its own subtree.
 	visited := map[string]bool{
-		refKey(root.GetAPIVersion(), root.GetKind(), root.GetNamespace(), root.GetName()): true,
+		identityKey(groupOf(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()): true,
 	}
 	node := build(ctx, cl, root, 0, visited, st)
 	return node, *st
 }
 
-func refKey(apiVersion, kind, namespace, name string) string {
-	return apiVersion + "/" + kind + "/" + namespace + "/" + name
+// identityKey is the dedup/cycle-detection key for a resource. It deliberately
+// omits the API version: the same object referenced under different versions
+// (e.g. v1 vs v1beta1) is still one resource, so group+kind+namespace+name is
+// its true identity.
+func identityKey(group, kind, namespace, name string) string {
+	return group + "/" + kind + "/" + namespace + "/" + name
+}
+
+// groupOf extracts the API group from an apiVersion ("group/version" → "group",
+// or "" for the core group).
+func groupOf(apiVersion string) string {
+	if i := strings.IndexByte(apiVersion, '/'); i >= 0 {
+		return apiVersion[:i]
+	}
+	return ""
 }
 
 func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, depth int, visited map[string]bool, st *Stats) *Node {
@@ -135,16 +149,22 @@ func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, 
 			continue
 		}
 
-		// Resolve once, here, so the visited key uses the *effective* namespace
-		// (v2 composed resources often omit it and inherit the parent XR's),
-		// matching how the root is keyed and keeping cycle/dedup detection sound.
+		// Resolve once, here, so the visited key uses the cluster-canonical
+		// group/kind and the *effective* namespace (v2 composed resources often
+		// omit it and inherit the parent XR's). Normalising against the resolved
+		// target — rather than the raw, possibly-partial ref fields — keeps the
+		// key consistent with the root's and makes cycle/dedup detection sound.
 		target, rerr := cl.Resolve(r.apiVersion, r.kind)
+		group, kind := groupOf(r.apiVersion), r.kind
 		ns := r.namespace
-		if rerr == nil && target.Namespaced && ns == "" {
-			ns = obj.GetNamespace()
+		if rerr == nil {
+			group, kind = target.GVR.Group, target.Kind
+			if target.Namespaced && ns == "" {
+				ns = obj.GetNamespace()
+			}
 		}
 
-		key := refKey(r.apiVersion, r.kind, ns, r.name)
+		key := identityKey(group, kind, ns, r.name)
 		if visited[key] {
 			continue
 		}
