@@ -189,14 +189,25 @@ func fetchChild(ctx context.Context, cl *k8s.Client, r ref, target k8s.Target, r
 	return build(ctx, cl, obj, depth, visited, st)
 }
 
-// childRefs collects downward references: spec.resourceRefs (list, composite →
-// composed) plus spec.resourceRef (single, claim → XR).
+// childRefs collects downward references to composed/managed resources.
+//
+// The location of composed-resource refs differs by Crossplane version:
+//   - v1 XRs put them at the top-level spec.resourceRefs.
+//   - v2 namespaced XRs nest Crossplane machinery under spec.crossplane, so the
+//     refs live at spec.crossplane.resourceRefs.
+//
+// A v1 Claim points to its XR via the single spec.resourceRef.
 func childRefs(obj *unstructured.Unstructured) []ref {
 	var refs []ref
-	if list, found, _ := unstructured.NestedSlice(obj.Object, "spec", "resourceRefs"); found {
-		for _, it := range list {
-			if m, ok := it.(map[string]any); ok {
-				refs = append(refs, refFromMap(m))
+	for _, path := range [][]string{
+		{"spec", "resourceRefs"},               // v1 composite → composed
+		{"spec", "crossplane", "resourceRefs"}, // v2 composite → composed
+	} {
+		if list, found, _ := unstructured.NestedSlice(obj.Object, path...); found {
+			for _, it := range list {
+				if m, ok := it.(map[string]any); ok {
+					refs = append(refs, refFromMap(m))
+				}
 			}
 		}
 	}
