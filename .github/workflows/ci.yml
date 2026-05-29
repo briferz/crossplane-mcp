@@ -57,9 +57,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+      # Build golangci-lint from source with the runner's Go toolchain rather
+      # than using a prebuilt binary: golangci-lint refuses to run when the Go
+      # version it was built with is older than go.mod's (here go 1.26).
+      - name: golangci-lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
   govulncheck:
     name: govulncheck
