@@ -1,5 +1,10 @@
 # crossplane-mcp
 
+[![CI](https://github.com/briferz/crossplane-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/briferz/crossplane-mcp/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/briferz/crossplane-mcp.svg)](https://pkg.go.dev/github.com/briferz/crossplane-mcp)
+[![Go Report Card](https://goreportcard.com/badge/github.com/briferz/crossplane-mcp)](https://goreportcard.com/report/github.com/briferz/crossplane-mcp)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+
 A **read-only diagnostic MCP server for Crossplane.** It gives an AI assistant
 (Claude, etc.) Crossplane-*aware* tools to debug stuck resources: it walks the
 Composite Resource (XR) → Managed Resource (MR) tree, pinpoints the resource
@@ -35,11 +40,27 @@ See [DESIGN.md](./DESIGN.md) for the full rationale and roadmap.
 | `get_resource` | One resource, pruned to conditions, recent events, and spec. |
 | `list_contexts` | Available kubeconfig contexts. |
 
-## Build
+## Install
+
+**Homebrew**
 
 ```sh
-go build -o bin/crossplane-mcp ./cmd/crossplane-mcp
-# or
+brew install briferz/tap/crossplane-mcp
+```
+
+**Container image** (GitHub Container Registry)
+
+```sh
+docker pull ghcr.io/briferz/crossplane-mcp:latest
+```
+
+**Pre-built binaries** — download from the [latest release](https://github.com/briferz/crossplane-mcp/releases/latest).
+
+**From source**
+
+```sh
+go install github.com/briferz/crossplane-mcp/cmd/crossplane-mcp@latest
+# or, in a clone:
 make build
 ```
 
@@ -80,15 +101,40 @@ with `AccessDenied: invalid credentials`) instead of the unhelpful top-level
 |---|---|---|
 | `--kubeconfig` | `$KUBECONFIG` / `~/.kube/config` | Path to kubeconfig. |
 | `--context` | current-context | Kubeconfig context to use. |
+| `--version` | | Print version and exit. |
 
 ## Development
 
 ```sh
-make test   # unit tests (no cluster required)
-make vet
-make fmt
+make test       # unit tests with race detector + coverage (no cluster required)
+make lint       # golangci-lint
+make vulncheck  # govulncheck
+make check      # mirror all CI gates locally (fmt, vet, lint, test, vulncheck)
 ```
+
+CI (build, test, `go vet`, `gofmt`, `golangci-lint`, `govulncheck`) runs on every
+push and PR via [GitHub Actions](./.github/workflows/ci.yml).
+
+## Releasing
+
+Tagging `vX.Y.Z` triggers the [release workflow](./.github/workflows/release.yml),
+which publishes cross-platform binaries + checksums, the Homebrew formula, and a
+multi-arch container image to `ghcr.io`.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+One-time prerequisites:
+
+- **Homebrew tap:** create a public `briferz/homebrew-tap` repository, and add a
+  repo secret `HOMEBREW_TAP_TOKEN` (a PAT with write access to it) so GoReleaser
+  can push the formula.
+- **Container registry:** the image publishes via the built-in `GITHUB_TOKEN`;
+  make the `ghcr.io` package public in the repo's package settings if you want
+  unauthenticated pulls.
 
 ## License
 
-TBD.
+[Apache License 2.0](./LICENSE).

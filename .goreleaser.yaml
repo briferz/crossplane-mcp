@@ -1,0 +1,79 @@
+# GoReleaser builds the cross-platform binaries, checksums, GitHub release notes,
+# and the Homebrew formula. The container image is built separately in the
+# release workflow via buildx (see .github/workflows/release.yml).
+#
+# Validate locally with: goreleaser check
+version: 2
+
+project_name: crossplane-mcp
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: crossplane-mcp
+    main: ./cmd/crossplane-mcp
+    binary: crossplane-mcp
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+homebrew_casks:
+  - name: crossplane-mcp
+    repository:
+      owner: briferz
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/briferz/crossplane-mcp"
+    description: "Read-only diagnostic MCP server for Crossplane"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    # The released binaries are unsigned; strip the macOS quarantine flag on
+    # install so the cask runs without a Gatekeeper prompt.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/crossplane-mcp"]
+          end
+
+release:
+  prerelease: auto

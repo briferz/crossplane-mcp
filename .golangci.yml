@@ -1,0 +1,11 @@
+# golangci-lint v2 configuration.
+# The default linters (errcheck, govet, ineffassign, staticcheck, unused) are
+# enabled implicitly; the list below adds a few high-signal, low-noise ones.
+version: "2"
+
+linters:
+  enable:
+    - misspell
+    - unconvert
+    - gosec
+    - bodyclose
