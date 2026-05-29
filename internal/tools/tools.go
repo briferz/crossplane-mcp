@@ -50,7 +50,7 @@ type DiagnoseInput struct {
 	Kind        string `json:"kind" jsonschema:"resource kind, e.g. XPostgreSQLInstance, Bucket, or a Claim kind"`
 	Name        string `json:"name" jsonschema:"resource name"`
 	APIVersion  string `json:"apiVersion,omitempty" jsonschema:"optional apiVersion (group/version) to disambiguate the kind"`
-	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace for namespaced resources; defaults to 'default'"`
+	Namespace   string `json:"namespace,omitempty" jsonschema:"namespace; required for namespaced kinds, omit for cluster-scoped ones"`
 	IncludeTree bool   `json:"includeTree,omitempty" jsonschema:"also return the full annotated tree, not just the suspects"`
 }
 
@@ -71,7 +71,7 @@ type TreeInput struct {
 	Kind       string `json:"kind" jsonschema:"resource kind to root the tree at"`
 	Name       string `json:"name" jsonschema:"resource name"`
 	APIVersion string `json:"apiVersion,omitempty" jsonschema:"optional apiVersion (group/version) to disambiguate the kind"`
-	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace for namespaced resources; defaults to 'default'"`
+	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace; required for namespaced kinds, omit for cluster-scoped ones"`
 }
 
 type TreeOutput struct {
@@ -96,7 +96,7 @@ type GetResourceInput struct {
 	Kind       string `json:"kind" jsonschema:"resource kind"`
 	Name       string `json:"name" jsonschema:"resource name"`
 	APIVersion string `json:"apiVersion,omitempty" jsonschema:"optional apiVersion (group/version) to disambiguate the kind"`
-	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace for namespaced resources; defaults to 'default'"`
+	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace; required for namespaced kinds, omit for cluster-scoped ones"`
 }
 
 type ResourceView struct {

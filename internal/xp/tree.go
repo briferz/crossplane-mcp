@@ -134,34 +134,37 @@ func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, 
 		if r.name == "" || r.kind == "" {
 			continue
 		}
-		key := refKey(r.apiVersion, r.kind, r.namespace, r.name)
+
+		// Resolve once, here, so the visited key uses the *effective* namespace
+		// (v2 composed resources often omit it and inherit the parent XR's),
+		// matching how the root is keyed and keeping cycle/dedup detection sound.
+		target, rerr := cl.Resolve(r.apiVersion, r.kind)
+		ns := r.namespace
+		if rerr == nil && target.Namespaced && ns == "" {
+			ns = obj.GetNamespace()
+		}
+
+		key := refKey(r.apiVersion, r.kind, ns, r.name)
 		if visited[key] {
 			continue
 		}
 		visited[key] = true
 
-		child := fetchChild(ctx, cl, r, obj.GetNamespace(), depth+1, visited, st)
-		n.Children = append(n.Children, child)
+		n.Children = append(n.Children, fetchChild(ctx, cl, r, target, rerr, ns, depth+1, visited, st))
 	}
 	return n
 }
 
-func fetchChild(ctx context.Context, cl *k8s.Client, r ref, parentNS string, depth int, visited map[string]bool, st *Stats) *Node {
-	target, err := cl.Resolve(r.apiVersion, r.kind)
-	if err != nil {
+func fetchChild(ctx context.Context, cl *k8s.Client, r ref, target k8s.Target, resolveErr error, ns string, depth int, visited map[string]bool, st *Stats) *Node {
+	if resolveErr != nil {
 		st.Nodes++
-		return &Node{APIVersion: r.apiVersion, Kind: r.kind, Name: r.name, Namespace: r.namespace, State: StatePending, Error: err.Error()}
-	}
-
-	ns := r.namespace
-	if target.Namespaced && ns == "" {
-		ns = parentNS // v2 composed MRs often omit namespace, inheriting the XR's
+		return &Node{APIVersion: r.apiVersion, Kind: r.kind, Name: r.name, Namespace: r.namespace, State: StatePending, Error: resolveErr.Error(), depth: depth}
 	}
 
 	obj, err := cl.Get(ctx, target, ns, r.name)
 	if err != nil {
 		st.Nodes++
-		return &Node{APIVersion: r.apiVersion, Kind: r.kind, Name: r.name, Namespace: ns, State: StatePending, Error: err.Error()}
+		return &Node{APIVersion: r.apiVersion, Kind: r.kind, Name: r.name, Namespace: ns, State: StatePending, Error: err.Error(), depth: depth}
 	}
 	return build(ctx, cl, obj, depth, visited, st)
 }

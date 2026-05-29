@@ -52,9 +52,13 @@ func New(kubeconfigPath, contextName string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discovery client: %w", err)
 	}
-	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	// Cache discovery so resolveByKind (ServerPreferredResources) and the mapper
+	// share results instead of re-hitting the API server on every resolution
+	// during a tree walk.
+	cached := memory.NewMemCacheClient(disco)
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(cached)
 
-	return &Client{Dyn: dyn, Disco: disco, Mapper: mapper, loader: loader}, nil
+	return &Client{Dyn: dyn, Disco: cached, Mapper: mapper, loader: loader}, nil
 }
 
 func restConfig(kubeconfigPath, contextName string) (*rest.Config, clientcmd.ClientConfig, error) {
