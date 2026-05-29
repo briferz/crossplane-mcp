@@ -43,7 +43,10 @@ make check      # fmt-check + vet + lint + test + vulncheck (mirrors CI)
    New tools must preserve it.
 2. **Crossplane v2 *and* v1/LegacyCluster.** Handle namespaced XRs (v2, no
    Claims) and cluster-scoped Claims (v1). The tree-walk and namespace logic
-   must cope with both.
+   must cope with both. **Note the ref location differs by version:** v1 XRs put
+   composed refs at top-level `spec.resourceRefs`; **v2 namespaced XRs nest
+   Crossplane machinery under `spec.crossplane`, so composed refs are at
+   `spec.crossplane.resourceRefs`.** The tree-walker must read both.
 3. **No secret contents in output.** Report connection-secret presence/status
    only, never values.
 4. **Token-light output.** Prune `managedFields` / noisy annotations; return only
@@ -80,7 +83,8 @@ See README "Releasing".
 
 - v0.1.0 is released; install via `brew install --cask briferz/tap/crossplane-mcp`
   or `ghcr.io/briferz/crossplane-mcp`.
-- The `diagnose` root-cause ranking is **depth-only** and not yet validated
-  against a real cluster — the `/e2e-fixture` skill spins up a deterministic
-  stuck-resource cluster for that.
+- The `diagnose` root-cause ranking sorts **blocking resources before pending
+  ones, then deepest-first**, and is not yet validated against a real cluster —
+  the `/e2e-fixture` skill spins up a deterministic stuck-resource cluster for
+  that.
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.

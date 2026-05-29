@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.go) command -v gofmt >/dev/null && gofmt -w \"$f\";; esac"
+            "command": "command -v jq >/dev/null || exit 0; f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.go) command -v gofmt >/dev/null && [ -f \"$f\" ] && gofmt -w \"$f\" || true;; esac"
           }
         ]
       }
