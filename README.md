@@ -135,6 +135,13 @@ One-time prerequisites:
   make the `ghcr.io` package public in the repo's package settings if you want
   unauthenticated pulls.
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and
+guidelines, and the [Code of Conduct](./CODE_OF_CONDUCT.md). To report a security
+issue, follow [SECURITY.md](./SECURITY.md). File bugs and ideas via the
+[issue templates](https://github.com/briferz/crossplane-mcp/issues/new/choose).
+
 ## License
 
 [Apache License 2.0](./LICENSE).
