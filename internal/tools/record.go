@@ -15,10 +15,12 @@ import (
 // and any error — so a session against a real cluster can be inspected later.
 // Enabled via --log-file / CROSSPLANE_MCP_LOG_FILE.
 //
-// It records read-only tool I/O only: resource names, namespaces, conditions,
-// events, and provider error messages. It never captures secret *contents* (the
-// server never reads those). Provider errors can still contain identifiers
-// (account IDs, ARNs, …), so review the file before sharing it off a machine
+// It records the full tool input and output. The server never reads Kubernetes
+// Secret objects, but the output it logs is not sanitised: `get_resource`
+// includes the resource's `spec`, which on Crossplane resources can carry inline
+// sensitive fields (provider config, connection parameters, credentials), and
+// provider error messages can contain identifiers (account IDs, ARNs, …). Treat
+// the log as potentially sensitive and review it before sharing off a machine
 // that touches production.
 type Recorder struct {
 	mu sync.Mutex
@@ -40,10 +42,20 @@ func NewRecorder(dest string) (*Recorder, error) {
 	return &Recorder{w: f, c: f}, nil
 }
 
-// Close releases the underlying file (no-op for stderr / nil).
+// Close releases the underlying file (no-op for stderr / nil). It takes the
+// same lock as record so it can't race with an in-flight write, and redirects
+// further writes to io.Discard so a late record() after Close is harmless.
 func (r *Recorder) Close() error {
-	if r != nil && r.c != nil {
-		return r.c.Close()
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.w = io.Discard
+	if r.c != nil {
+		c := r.c
+		r.c = nil
+		return c.Close()
 	}
 	return nil
 }

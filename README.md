@@ -132,13 +132,16 @@ crossplane-mcp --context my-cluster
 
 Each tool call appends one JSON line: `{time, tool, durationMs, input, output, error}`.
 The file is created `0600`. Logging goes only to the file/stderr — never stdout,
-which is the MCP protocol channel.
+which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
+may interleave with other process output; use a file for clean JSONL.)
 
-> **Sensitivity:** records contain cluster *metadata* — resource names,
-> namespaces, conditions, events, and provider error messages (which on real
-> clusters can include identifiers like account IDs or ARNs). Secret *contents*
-> are never captured (the server doesn't read them). **Review the file before
-> sharing it off a machine that touches production.**
+> **Sensitivity:** the **full tool input and output** are logged, unsanitised.
+> The server never reads Kubernetes Secret objects, but `get_resource` logs a
+> resource's `spec` verbatim — which on Crossplane resources can carry inline
+> sensitive fields (provider config, connection parameters, credentials) — and
+> provider errors can include identifiers (account IDs, ARNs). Treat the log as
+> potentially sensitive and **review it before sharing off a machine that touches
+> production.**
 
 ## Development
 
