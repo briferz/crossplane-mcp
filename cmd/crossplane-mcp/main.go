@@ -22,8 +22,14 @@ func main() {
 	var (
 		kubeconfig  = flag.String("kubeconfig", "", "path to kubeconfig (defaults to KUBECONFIG / ~/.kube/config; in-cluster if absent)")
 		kubeContext = flag.String("context", "", "kubeconfig context to use (defaults to current-context)")
+		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	cl, err := k8s.New(*kubeconfig, *kubeContext)
 	if err != nil {

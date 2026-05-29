@@ -1,0 +1,95 @@
+name: Bug report
+description: Report something that isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please fill out the sections below so we can
+        reproduce and fix it quickly. For security issues, use the security
+        advisory link instead (see SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Which tool?
+      description: Which MCP tool surfaced the problem?
+      options:
+        - diagnose
+        - get_resource_tree
+        - get_resource
+        - list_contexts
+        - "Other / not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Include the tool arguments used (kind/name/namespace) and any relevant manifests.
+      placeholder: |
+        1. Call `diagnose` with { kind: "...", name: "...", namespace: "..." }
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / logs
+      description: Tool output, server stderr, or relevant `kubectl` output. Redact anything sensitive.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: crossplane-mcp version
+      description: Output of `crossplane-mcp --version`.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - Container image (ghcr.io)
+        - Pre-built binary
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: crossplane-version
+    attributes:
+      label: Crossplane version
+      description: e.g. v2.3.0. Note whether you're using v2 (namespaced XRs) or v1/LegacyCluster (Claims).
+    validations:
+      required: true
+
+  - type: input
+    id: kubernetes-version
+    attributes:
+      label: Kubernetes version
+      placeholder: v1.31.0
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I'm using the latest release of crossplane-mcp.
+          required: false
