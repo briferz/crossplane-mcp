@@ -45,7 +45,7 @@ func main() {
 			os.Exit(1)
 		}
 		rec = r
-		defer rec.Close()
+		defer func() { _ = rec.Close() }()
 	}
 
 	cl, err := k8s.New(*kubeconfig, *kubeContext)

@@ -32,7 +32,8 @@ func NewRecorder(dest string) (*Recorder, error) {
 	if dest == "-" || dest == "stderr" {
 		return &Recorder{w: os.Stderr}, nil
 	}
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// #nosec G304 -- dest is an operator-provided log path (flag/env), not attacker-controlled.
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-provided log path
 	if err != nil {
 		return nil, err
 	}
