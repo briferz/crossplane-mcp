@@ -88,9 +88,10 @@ type ref struct {
 	namespace  string
 }
 
-// BuildTree walks the composition tree starting from root, following
-// spec.resourceRefs (composite → composed) and spec.resourceRef (claim → XR).
-// Composed resources that are themselves composites recurse naturally.
+// BuildTree walks the composition tree starting from root, following composed
+// refs (v1 spec.resourceRefs and v2 spec.crossplane.resourceRefs) and the v1
+// claim's spec.resourceRef. Composed resources that are themselves composites
+// recurse naturally.
 func BuildTree(ctx context.Context, cl *k8s.Client, root *unstructured.Unstructured) (*Node, Stats) {
 	st := &Stats{}
 	// Seed visited with the root so a child that references back to it is not
