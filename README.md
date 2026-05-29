@@ -135,13 +135,17 @@ The file is created `0600`. Logging goes only to the file/stderr — never stdou
 which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
 may interleave with other process output; use a file for clean JSONL.)
 
-> **Sensitivity:** the **full tool input and output** are logged, unsanitised.
-> The server never reads Kubernetes Secret objects, but `get_resource` logs a
-> resource's `spec` verbatim — which on Crossplane resources can carry inline
-> sensitive fields (provider config, connection parameters, credentials) — and
-> provider errors can include identifiers (account IDs, ARNs). Treat the log as
-> potentially sensitive and **review it before sharing off a machine that touches
-> production.**
+By default, scalar values under sensitive keys (`password`, `token`, `secret`,
+`credential`, `apikey`, `accesskey`, `privatekey`, `connection`, `dsn`, …) are
+**masked** as `[redacted]` — so inline credentials in a resource `spec` aren't
+written verbatim. Reference structures (e.g. a `secretRef`'s name) are kept.
+Disable masking with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
+
+> **Sensitivity:** masking is **heuristic and key-based** — it can miss a secret
+> stored under an unexpected key, and it does not scrub provider *error* text
+> (which may contain identifiers like account IDs or ARNs). The server never
+> reads Kubernetes Secret objects. Treat the log as potentially sensitive and
+> **review it before sharing off a machine that touches production.**
 
 ## Development
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,31 +16,34 @@ import (
 // and any error — so a session against a real cluster can be inspected later.
 // Enabled via --log-file / CROSSPLANE_MCP_LOG_FILE.
 //
-// It records the full tool input and output. The server never reads Kubernetes
-// Secret objects, but the output it logs is not sanitised: `get_resource`
-// includes the resource's `spec`, which on Crossplane resources can carry inline
-// sensitive fields (provider config, connection parameters, credentials), and
-// provider error messages can contain identifiers (account IDs, ARNs, …). Treat
-// the log as potentially sensitive and review it before sharing off a machine
-// that touches production.
+// It records the full tool input and output. By default (redact=true) scalar
+// values under sensitive keys (password/token/secret/credential/…) are masked,
+// so inline credentials in a resource spec are not written verbatim. Masking is
+// heuristic and key-based, though: it can miss a secret stored under an
+// unexpected key and does not mask provider error text (which may contain
+// identifiers like account IDs or ARNs). The server never reads Kubernetes
+// Secret objects. Treat the log as potentially sensitive and review it before
+// sharing off a machine that touches production.
 type Recorder struct {
-	mu sync.Mutex
-	w  io.Writer
-	c  io.Closer
+	mu     sync.Mutex
+	w      io.Writer
+	c      io.Closer
+	redact bool
 }
 
 // NewRecorder opens dest for appending. dest "-" or "stderr" writes to stderr;
-// anything else is treated as a file path (created if absent, mode 0600).
-func NewRecorder(dest string) (*Recorder, error) {
+// anything else is treated as a file path (created if absent, mode 0600). When
+// redact is true, scalar values under sensitive keys are masked before writing.
+func NewRecorder(dest string, redact bool) (*Recorder, error) {
 	if dest == "-" || dest == "stderr" {
-		return &Recorder{w: os.Stderr}, nil
+		return &Recorder{w: os.Stderr, redact: redact}, nil
 	}
 	// #nosec G304 -- dest is an operator-provided log path (flag/env), not attacker-controlled.
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-provided log path
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{w: f, c: f}, nil
+	return &Recorder{w: f, c: f, redact: redact}, nil
 }
 
 // Close releases the underlying file (no-op for stderr / nil). It takes the
@@ -74,12 +78,12 @@ func (r *Recorder) record(name string, dur time.Duration, in, out any, callErr e
 		Time:       time.Now().UTC().Format(time.RFC3339Nano),
 		Tool:       name,
 		DurationMs: dur.Milliseconds(),
-		Input:      in,
+		Input:      r.prepare(in),
 	}
 	if callErr != nil {
 		rec.Error = callErr.Error()
 	} else {
-		rec.Output = out
+		rec.Output = r.prepare(out)
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -88,6 +92,79 @@ func (r *Recorder) record(name string, dur time.Duration, in, out any, callErr e
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, _ = r.w.Write(append(b, '\n'))
+}
+
+const redactedMarker = "[redacted]"
+
+// sensitiveKey reports whether a field name suggests an inline secret value.
+// Matched case-insensitively as substrings. Kept narrow enough to avoid masking
+// innocuous fields (e.g. bare "key") while catching the dangerous ones.
+var sensitiveKeyParts = []string{
+	"password", "passwd", "secret", "token", "credential",
+	"apikey", "api_key", "api-key", "accesskey", "access_key",
+	"privatekey", "private_key", "private-key", "connectionstring",
+	"connection", "dsn", "sasl",
+}
+
+func sensitiveKey(k string) bool {
+	lk := strings.ToLower(k)
+	for _, p := range sensitiveKeyParts {
+		if strings.Contains(lk, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// prepare returns v normalised for logging, with sensitive scalar values masked
+// when redaction is enabled. Returns v unchanged when redaction is off or v is
+// nil. Best-effort: if v can't be round-tripped through JSON, it's logged as-is.
+func (r *Recorder) prepare(v any) any {
+	if v == nil || !r.redact {
+		return v
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	var g any
+	if err := json.Unmarshal(b, &g); err != nil {
+		return v
+	}
+	return redactValue(g)
+}
+
+// redactValue masks scalar values under sensitive keys but recurses into maps
+// and slices, so reference structures (e.g. a secretRef's name/namespace) are
+// preserved while inline credential *values* are masked.
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if sensitiveKey(k) && isScalar(val) {
+				t[k] = redactedMarker
+			} else {
+				t[k] = redactValue(val)
+			}
+		}
+		return t
+	case []any:
+		for i := range t {
+			t[i] = redactValue(t[i])
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+func isScalar(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return false
+	default:
+		return true
+	}
 }
 
 // recorded wraps a typed tool handler so its input/output is appended to the

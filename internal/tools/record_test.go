@@ -85,6 +85,45 @@ func TestRecordedWritesLine(t *testing.T) {
 	}
 }
 
+// TestRecorderRedaction confirms scalar values under sensitive keys are masked
+// while reference structures (a secretRef's name) and innocuous fields survive,
+// and that --log-redact=false (redact:false) leaves everything intact.
+func TestRecorderRedaction(t *testing.T) {
+	out := map[string]any{
+		"spec": map[string]any{
+			"forProvider": map[string]any{
+				"password":  "p@ssw0rd",
+				"region":    "us-east-1",
+				"apiToken":  "tok-123",
+				"secretRef": map[string]any{"name": "db-conn", "namespace": "team-a"},
+			},
+		},
+	}
+
+	// redaction on
+	var on bytes.Buffer
+	(&Recorder{w: &on, redact: true}).record("get_resource", 0, nil, out, nil)
+	s := on.String()
+	if !contains(s, redactedMarker) {
+		t.Fatalf("expected redaction marker, got: %s", s)
+	}
+	if contains(s, "p@ssw0rd") || contains(s, "tok-123") {
+		t.Errorf("sensitive scalar leaked: %s", s)
+	}
+	if !contains(s, "us-east-1") || !contains(s, "db-conn") {
+		t.Errorf("non-sensitive value (region) or ref name (db-conn) was over-redacted: %s", s)
+	}
+
+	// redaction off
+	var off bytes.Buffer
+	(&Recorder{w: &off, redact: false}).record("get_resource", 0, nil, out, nil)
+	if !contains(off.String(), "p@ssw0rd") {
+		t.Errorf("redact:false should keep values verbatim: %s", off.String())
+	}
+}
+
+func contains(s, sub string) bool { return bytes.Contains([]byte(s), []byte(sub)) }
+
 // TestRecorderConcurrent guards the mutex: concurrent records (and a racing
 // Close) must not interleave or race. Run with -race.
 func TestRecorderConcurrent(t *testing.T) {
