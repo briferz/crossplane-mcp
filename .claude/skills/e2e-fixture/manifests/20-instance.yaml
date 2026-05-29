@@ -1,0 +1,10 @@
+# The composite resource instance. In Crossplane v2 XRs are namespaced, so this
+# is what `diagnose` is pointed at: { kind: XStuckApp, name: demo, namespace: default }.
+---
+apiVersion: example.org/v1alpha1
+kind: XStuckApp
+metadata:
+  name: demo
+  namespace: default
+spec:
+  message: "deliberately stuck for diagnose validation"

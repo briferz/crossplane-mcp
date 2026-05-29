@@ -126,7 +126,7 @@ tagging.
 
 1. Merge `feat:` / `fix:` PRs to `main` as usual.
 2. release-please opens (and keeps updating) a **release PR** titled
-   `chore(release): X.Y.Z` with the next version and an updated `CHANGELOG.md`.
+   `chore(main): release X.Y.Z` with the next version and an updated `CHANGELOG.md`.
 3. **Merge that release PR** to cut the release: release-please creates the
    `vX.Y.Z` tag and GitHub release, then [GoReleaser](./.github/workflows/release.yml)
    attaches cross-platform binaries + checksums and publishes the Homebrew cask,

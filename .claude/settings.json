@@ -1,0 +1,18 @@
+{
+  "enabledPlugins": {
+    "claude-code-setup@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v jq >/dev/null || exit 0; f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.go) command -v gofmt >/dev/null && [ -f \"$f\" ] && gofmt -w \"$f\" || true;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}
