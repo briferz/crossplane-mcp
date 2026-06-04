@@ -174,6 +174,25 @@ func TestListUnhealthyHandlerUnknownCategory(t *testing.T) {
 	}
 }
 
+func TestListUnhealthyHandlerTrimsNamespace(t *testing.T) {
+	h := listUnhealthyHandler(listUnhealthyClient())
+	_, out, err := h(context.Background(), nil, ListUnhealthyInput{Namespace: "   "})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// A whitespace-only namespace must be treated as cluster-wide (trimmed to
+	// empty), so the cluster-scoped XR appears rather than being skipped.
+	var sawCluster bool
+	for _, it := range out.Items {
+		if it.Kind == "XCluster" {
+			sawCluster = true
+		}
+	}
+	if !sawCluster {
+		t.Error("whitespace namespace should be trimmed to a cluster-wide scan (XCluster expected)")
+	}
+}
+
 func TestListUnhealthyHandlerKindFilter(t *testing.T) {
 	h := listUnhealthyHandler(listUnhealthyClient())
 	_, out, err := h(context.Background(), nil, ListUnhealthyInput{Kind: "appclaim"})

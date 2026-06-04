@@ -138,6 +138,12 @@ func matchCategory(have, want []string) string {
 func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace string) ListResult {
 	var res ListResult
 	for _, k := range kinds {
+		// Stop promptly if the caller's context is done (client gone / timeout)
+		// instead of firing a List for every remaining type.
+		if err := ctx.Err(); err != nil {
+			res.Notes = append(res.Notes, fmt.Sprintf("listing aborted: %v", err))
+			return res
+		}
 		// A namespace filter cannot scope a cluster-scoped resource.
 		if !k.Namespaced && namespace != "" {
 			res.Notes = append(res.Notes, fmt.Sprintf("skipped cluster-scoped %s: namespace filter set", k.Kind))
@@ -154,6 +160,9 @@ func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace s
 			list, err := lister.List(ctx, metav1.ListOptions{Limit: listChunkSize, Continue: cont})
 			if err != nil {
 				res.Notes = append(res.Notes, listSkipNote(k, namespace, err))
+				if ctx.Err() != nil {
+					return res // cancelled mid-list: stop, don't try the rest
+				}
 				break
 			}
 			for i := range list.Items {

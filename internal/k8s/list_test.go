@@ -295,6 +295,20 @@ func TestListAllPaginates(t *testing.T) {
 	}
 }
 
+func TestListAllAbortsOnCancelledContext(t *testing.T) {
+	cl, kinds := listFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done before the first List
+
+	res := cl.ListAll(ctx, kinds, "")
+	if len(res.Objects) != 0 {
+		t.Errorf("expected no objects when the context is cancelled, got %d", len(res.Objects))
+	}
+	if !hasNote(res.Notes, "listing aborted") {
+		t.Errorf("expected an 'listing aborted' note, got %v", res.Notes)
+	}
+}
+
 func hasNote(notes []string, sub string) bool {
 	for _, n := range notes {
 		if strings.Contains(n, sub) {
