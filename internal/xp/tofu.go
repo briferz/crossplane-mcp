@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -75,8 +76,12 @@ var tfErrorMarkers = []string{"error:", "summary:"}
 // tfLogPrefixes are bracketed log-level prefixes dropped from the decoded blob.
 var tfLogPrefixes = []string{"[trace]", "[debug]", "[info]", "[warn]", "[error]", "[fatal]"}
 
-// tfOTELNoise are substrings of OpenTelemetry boilerplate lines worth dropping.
-var tfOTELNoise = []string{"otel_traces_exporter", "otel tracing is not enabled"}
+// tfOTELNoise are leftKey PREFIXES of OpenTelemetry boilerplate lines. Matched
+// by prefix (not substring) so a legitimate error/context line that merely
+// mentions one of these tokens — e.g. "  with aws_iam_role.otel_traces_exporter,"
+// (a resource the user named after the env var) — is NOT misclassified as a log
+// line and dropped, which would hide the failure site.
+var tfOTELNoise = []string{"opentelemetry:", "otel_traces_exporter", "otel tracing is not enabled"}
 
 // decodeTFErrors scans condition messages AND event messages for the shell hint,
 // decodes each blob, extracts its actionable lines, and returns the results
@@ -178,6 +183,11 @@ func decodeBlob(b64 string) (decoded string, ok bool) {
 	overflow := false
 	if len(out) > maxDecompressedBytes {
 		out = out[:maxDecompressedBytes]
+		// The byte-boundary cut may split a trailing multibyte rune; drop it so
+		// the decoded string stays valid UTF-8 (json would emit U+FFFD otherwise).
+		for len(out) > 0 && !utf8.Valid(out) {
+			out = out[:len(out)-1]
+		}
 		overflow = true
 	}
 	if len(out) == 0 {
@@ -300,7 +310,12 @@ func isLog(line string) bool {
 			return true
 		}
 	}
-	return containsAny(line, tfOTELNoise)
+	for _, p := range tfOTELNoise {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func dropSpace(r rune) rune {

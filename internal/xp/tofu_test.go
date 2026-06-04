@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -74,11 +75,37 @@ func TestIsLog(t *testing.T) {
 		{"[TRACE] OTEL_TRACES_EXPORTER not set", true},
 		{"Error: a real error", false},
 		{"  with module.x.resource", false},
+		// OTEL boilerplate is matched by PREFIX (anchored), so the env-var echo
+		// line is a log…
+		{"OTEL_TRACES_EXPORTER not set, OTel tracing is not enabled", true},
+		{"OpenTelemetry: exporter configured", true},
+		// …but a real failure-site line that merely names a resource after the
+		// env var must NOT be classified as a log and dropped.
+		{"  with aws_iam_role.otel_traces_exporter,", false},
 	}
 	for _, c := range cases {
 		if got := isLog(c.line); got != c.want {
 			t.Errorf("isLog(%q) = %v, want %v", c.line, got, c.want)
 		}
+	}
+}
+
+func TestExtractActionable_OTELNamedResourceNotDropped(t *testing.T) {
+	decoded := strings.Join([]string{
+		"[TRACE] OpenTelemetry: OTEL_TRACES_EXPORTER not set, OTel tracing is not enabled",
+		"Error: creating role failed",
+		"  with aws_iam_role.otel_traces_exporter,",
+		"  on main.tf line 3",
+	}, "\n")
+	joined := strings.Join(extractActionable(decoded), "\n")
+	if strings.Contains(joined, "[TRACE]") {
+		t.Errorf("OTEL [TRACE] boilerplate should be dropped: %q", joined)
+	}
+	if !strings.Contains(joined, "with aws_iam_role.otel_traces_exporter") {
+		t.Errorf("the failure-site line naming an OTEL-named resource must NOT be dropped: %q", joined)
+	}
+	if !strings.Contains(joined, "Error: creating role failed") {
+		t.Errorf("the error line must survive: %q", joined)
 	}
 }
 
@@ -386,6 +413,23 @@ func TestDecodeBlob_OverflowTruncationMarker(t *testing.T) {
 	}
 	if len(got) > maxDecompressedBytes+len(truncationMarker)+1 {
 		t.Errorf("output not capped: len=%d", len(got))
+	}
+}
+
+func TestDecodeBlob_OverflowValidUTF8(t *testing.T) {
+	// A >4 MiB stream of pure multibyte runes forces the byte-boundary overflow
+	// cut to land mid-rune; the result must still be valid UTF-8 (no U+FFFD
+	// mojibake when JSON-encoded into decodedErrors).
+	payload := strings.Repeat("€", 1_400_000) // 3 bytes each → ~4.2 MiB
+	got, ok := decodeBlob(gzipB64(t, payload))
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !utf8.ValidString(got) {
+		t.Error("overflow truncation split a multibyte rune; decoded output is not valid UTF-8")
+	}
+	if !strings.HasSuffix(got, truncationMarker) {
+		t.Error("expected truncation marker")
 	}
 }
 
