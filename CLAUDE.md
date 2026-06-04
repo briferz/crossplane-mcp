@@ -17,7 +17,8 @@ resource first, and returns full condition messages + events. See
   kind→GVR resolution, get, events, contexts.
 - `internal/xp/` — Crossplane diagnostic logic: condition classification, tree
   walk, root-cause ranking. **Pure and unit-tested here** (`*_test.go`).
-- `internal/tools/` — MCP tool registration + handlers (the 4 tools).
+- `internal/tools/` — MCP tool registration + handlers (the read-only tools:
+  `diagnose`, `list_unhealthy`, `get_resource_tree`, `get_resource`, `list_contexts`).
 
 ## Build / test / checks
 

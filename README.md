@@ -47,7 +47,8 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 
 | Tool | Purpose |
 |---|---|
-| `diagnose` | Walk the tree from a resource, rank blocking resources (deepest first) with full messages + recent events. **Start here.** |
+| `diagnose` | Walk the tree from a resource, rank blocking resources (deepest first) with full messages + recent events. **Start here** when you know the resource. |
+| `list_unhealthy` | Triage the whole cluster: list composite resources (XRs) and claims that are not Ready/Synced — tiny rows ready to feed straight into `diagnose`. **Start here** when you don't yet know *what* is broken. |
 | `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. |
 | `get_resource` | One resource, pruned to conditions, recent events, and spec. |
 | `list_contexts` | Available kubeconfig contexts. |
