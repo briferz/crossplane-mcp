@@ -82,9 +82,22 @@ var tfLogPrefixes = []string{"[trace]", "[debug]", "[info]", "[warn]", "[error]"
 // line and dropped, which would hide the failure site.
 var tfOTELNoise = []string{"opentelemetry:", "otel_traces_exporter", "otel tracing is not enabled"}
 
+// ansiRe matches ANSI SGR (color/style) escape sequences. OpenTofu colors its
+// diagnostics by default, so a colored "Error:" would otherwise fail marker
+// detection and color codes would leak into the output; strip them (they are
+// presentation-only, never content) from the whole blob before classifying.
+var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// tsRe matches a leading hclog/RFC3339 timestamp — the format Terraform/OpenTofu
+// emit when TF_LOG is set, e.g. "2026-06-04T13:31:27.046-0600 [TRACE] …".
+// Stripping it (for classification only) lets isLog see the "[level]" prefix and
+// drop the line as noise. Anchored and requiring trailing whitespace so a line
+// whose content merely mentions a date is not misclassified.
+var tsRe = regexp.MustCompile(`^\s*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+`)
+
 // decodeTFErrors scans condition messages AND event messages for the shell hint,
 // decodes each blob, extracts its actionable lines, and returns the results
-// joined one entry per blob. seen dedups byte-identical decoded results within
+// joined one entry per blob. seen dedups byte-identical decoded blobs within
 // and across suspects in a single Diagnose call (the same blob re-fires every
 // reconcile, so it lands in both the Synced condition and the recurring event,
 // and often mirrors up the composite chain). Returns nil when nothing decodes,
@@ -97,16 +110,19 @@ func decodeTFErrors(condMsgs []string, events []k8s.Event, seen map[string]bool)
 			if !ok {
 				continue
 			}
+			// Dedup on the DECODED blob, not the reduced output: the same blob
+			// re-fires every reconcile (condition + recurring event + mirrored up
+			// the composite chain), but two DISTINCT errors that happen to share a
+			// >maxLineRunes line prefix or an elided middle must not collapse.
+			if seen[decoded] {
+				continue
+			}
 			lines := extractActionable(decoded)
 			if len(lines) == 0 {
 				continue
 			}
-			joined := strings.Join(lines, "\n")
-			if seen[joined] {
-				continue
-			}
-			seen[joined] = true
-			out = append(out, joined)
+			seen[decoded] = true
+			out = append(out, strings.Join(lines, "\n"))
 		}
 	}
 	for _, m := range condMsgs {
@@ -272,6 +288,7 @@ func applyBudget(lines []string) []string {
 }
 
 func splitLines(s string) []string {
+	s = ansiRe.ReplaceAllString(s, "") // strip color escapes (presentation-only) from both classification and output
 	raw := strings.Split(s, "\n")
 	for i := range raw {
 		raw[i] = strings.TrimSuffix(raw[i], "\r")
@@ -282,7 +299,7 @@ func splitLines(s string) []string {
 // leftKey normalises a line for prefix matching: leading whitespace and box /
 // quote-bar characters (TF's "│ " / "> " diagnostic gutters) stripped, lowered.
 func leftKey(line string) string {
-	return strings.ToLower(strings.TrimLeft(line, " \t│>"))
+	return strings.ToLower(strings.TrimLeft(tsRe.ReplaceAllString(line, ""), " \t│>"))
 }
 
 func firstMarker(lines []string) int {

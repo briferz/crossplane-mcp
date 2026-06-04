@@ -82,6 +82,12 @@ func TestIsLog(t *testing.T) {
 		// …but a real failure-site line that merely names a resource after the
 		// env var must NOT be classified as a log and dropped.
 		{"  with aws_iam_role.otel_traces_exporter,", false},
+		// hclog/RFC3339-timestamped log lines (the real TF_LOG format) are logs…
+		{"2026-06-04T13:31:27.046-0600 [TRACE] plugin: teardown", true},
+		{"2026-06-04T13:31:27Z [INFO]  Terraform version: 1.15.5", true},
+		// …but a line whose CONTENT merely mentions a date must not be a log.
+		{"  on 2024-config.tf line 3", false},
+		{"Error: created 2026-06-04T00:00:00Z snapshot but apply failed", false},
 	}
 	for _, c := range cases {
 		if got := isLog(c.line); got != c.want {
@@ -250,6 +256,57 @@ func TestExtractActionable_LongLineCapped(t *testing.T) {
 	box := strings.Repeat("│", 8000) // 3 bytes each
 	if got := extractActionable("Error: " + box); !strings.HasSuffix(got[0], lineTruncMarker) {
 		t.Error("multibyte line should cap cleanly")
+	}
+}
+
+func TestExtractActionable_ColoredMarkerAndTimestampedLogs(t *testing.T) {
+	// Real default OpenTofu output: ANSI-colored Error: marker + TF_LOG
+	// timestamped trace lines. The marker must be detected (not dropped into the
+	// noise-evicting fallback), the timestamped logs dropped, and ANSI stripped.
+	decoded := strings.Join([]string{
+		"2026-06-04T13:31:27.046-0600 [TRACE] plugin: starting",
+		"2026-06-04T13:31:27.100-0600 [DEBUG] using provider",
+		"\x1b[31m\x1b[1mError:\x1b[0m creating instance failed",
+		"  on main.tf line 9",
+	}, "\n")
+	joined := strings.Join(extractActionable(decoded), "\n")
+	if !strings.Contains(joined, "Error: creating instance failed") {
+		t.Fatalf("colored Error: must be detected and surface: %q", joined)
+	}
+	if strings.Contains(joined, "[TRACE]") || strings.Contains(joined, "[DEBUG]") {
+		t.Errorf("timestamped logs must be dropped: %q", joined)
+	}
+	if strings.Contains(joined, "\x1b[") {
+		t.Errorf("ANSI escapes must be stripped from output: %q", joined)
+	}
+}
+
+func TestExtractActionable_TimestampedLogsNoMarkerFallback(t *testing.T) {
+	// No Error:/Summary: marker: the fallback must drop timestamped trace noise
+	// and keep the real signal (regression: timestamped logs previously evicted it).
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "2026-06-04T13:31:27.046-0600 [TRACE] plugin chatter")
+	}
+	lines = append(lines, "could not apply configuration: exit status 1")
+	joined := strings.Join(extractActionable(strings.Join(lines, "\n")), "\n")
+	if !strings.Contains(joined, "could not apply configuration") {
+		t.Fatalf("real signal must survive timestamped-log eviction: %q", joined)
+	}
+	if strings.Contains(joined, "[TRACE]") {
+		t.Errorf("timestamped trace noise must be dropped: %q", joined)
+	}
+}
+
+func TestDecodeTFErrors_DistinctLongPrefixNotCollapsed(t *testing.T) {
+	// Two genuinely distinct errors sharing a >maxLineRunes single-line prefix
+	// must NOT collapse: dedup keys on the decoded blob, not the capped output.
+	body := strings.Repeat("x", maxLineRunes+1000)
+	a := tofuHint(gzipB64(t, "Error: "+body+" (Code=InsufficientCapacity)"))
+	b := tofuHint(gzipB64(t, "Error: "+body+" (Code=VcpuLimitExceeded)"))
+	got := decodeTFErrors([]string{"c " + a, "c " + b}, nil, map[string]bool{})
+	if len(got) != 2 {
+		t.Fatalf("distinct errors sharing a >maxLineRunes prefix must not collapse, got %d", len(got))
 	}
 }
 
