@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/briferz/crossplane-mcp/compare/v0.2.1...v0.3.0) (2026-06-04)
+
+
+### Features
+
+* add list_unhealthy tool to triage broken XRs and claims cluster-wide ([#28](https://github.com/briferz/crossplane-mcp/issues/28)) ([d36f1d9](https://github.com/briferz/crossplane-mcp/commit/d36f1d99fd623d75963764eb9f8db90e543e273d))
+* weight recurring composition events over transport-flake conditions in diagnose ([#25](https://github.com/briferz/crossplane-mcp/issues/25)) ([27fac1a](https://github.com/briferz/crossplane-mcp/commit/27fac1ab0521fba61c756ec7f99f859767879630))
+
 ## [0.2.1](https://github.com/briferz/crossplane-mcp/compare/v0.2.0...v0.2.1) (2026-06-04)
 
 
