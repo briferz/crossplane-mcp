@@ -42,11 +42,11 @@ type Suspect struct {
 	// and reduced to its Error:/Summary: lines (or the trailing non-log lines
 	// when no such marker is present), kept whole — except that a single
 	// pathological line is capped with an explicit marker pointing back to the
-	// shell hint, to stay token-light. Like all provider error text it is NOT
-	// scrubbed for
-	// inline identifiers (account IDs, ARNs) or a credential a provider rendered
-	// into its error, and is written unmasked to --log-file; values that should
-	// be hidden must be marked sensitive in the Terraform/OpenTofu config. The
+	// shell hint, to stay token-light. The decoded text is surfaced in the live
+	// response as-is — identifiers like account IDs/ARNs are intentionally kept
+	// (often the actionable detail); in the --log-file the recorder's best-effort
+	// secret scrub applies but does not guarantee removal, so marking values
+	// sensitive in the Terraform/OpenTofu config remains the source of truth. The
 	// server never reads Secret objects. Empty when no hint is present or the
 	// blob cannot be decoded.
 	DecodedErrors []string    `json:"decodedErrors,omitempty"`

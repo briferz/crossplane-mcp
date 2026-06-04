@@ -92,6 +92,8 @@ See README "Releasing".
   (the `echo … | base64 -d | gunzip` hint) into `Suspect.DecodedErrors`, trimmed
   to the actionable `Error:`/`Summary:` lines (issue #24 #3/#5). Pure logic in
   `internal/xp/tofu.go`; **additive** — the verbatim condition stays in `reasons`.
-  Decoded text is surfaced as-is (not scrubbed); `sensitive`-marking is the
-  TF/OpenTofu config's responsibility, not ours.
+  Decoded text is surfaced as-is in the response (identifiers like ARNs kept); the
+  `--log-file` recorder applies a best-effort high-precision secret scrub
+  (PEM/AWS-key/JWT/Bearer, in `internal/tools/record.go`). `sensitive`-marking
+  remains the TF/OpenTofu config's responsibility, not ours.
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.

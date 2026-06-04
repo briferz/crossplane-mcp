@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,15 +18,20 @@ import (
 // and any error — so a session against a real cluster can be inspected later.
 // Enabled via --log-file / CROSSPLANE_MCP_LOG_FILE.
 //
-// It records the full tool input and output. By default (redact=true) scalar
-// values under sensitive keys (password/token/secret/credential/…) are masked,
-// so inline credentials in a resource spec are not written verbatim. Masking is
-// heuristic and key-based, though: it can miss a secret stored under an
-// unexpected key and does not mask provider error text (which may contain
-// identifiers like account IDs or ARNs) — including the decoded
-// provider-terraform/OpenTofu error surfaced under decodedErrors, which is
-// logged verbatim and not scrubbed (it may carry provider-rendered identifiers
-// or inline credentials). The server never reads Kubernetes Secret objects.
+// It records the full tool input and output. By default (redact=true) two
+// masks run: (1) key-based — scalar values under sensitive keys
+// (password/token/secret/credential/…) are masked, so inline credentials in a
+// resource spec are not written verbatim; (2) content-based — every logged
+// string value is scrubbed for a few high-precision secret shapes (PEM private
+// keys, AWS access-key IDs, JWTs, Authorization: Bearer tokens), which catches
+// credential material the key-based mask misses, including in provider error
+// text and the decoded provider-terraform/OpenTofu blob (decodedErrors).
+//
+// Both masks are BEST-EFFORT, not a guarantee: the content scrub is deliberately
+// high-precision and will not catch an arbitrary or unusually-shaped secret, and
+// it intentionally does NOT mask identifiers like account IDs or ARNs (they are
+// often the actionable detail). Redaction applies only to the log; the live tool
+// response is never altered. The server never reads Kubernetes Secret objects.
 // Treat the log as potentially sensitive and review it before sharing off a
 // machine that touches production.
 type Recorder struct {
@@ -141,6 +147,35 @@ func sensitiveKey(k string) bool {
 	return false
 }
 
+// secretPatterns are high-precision matchers for credential material that can
+// appear inline in a string VALUE (not just under a sensitive key) — e.g. a
+// private key or token rendered into a provider error or a decoded OpenTofu
+// blob, which the key-based mask never sees. Deliberately high-precision
+// (distinctive prefixes/structure) so innocuous identifiers like ARNs, account
+// IDs, resource IDs, and request UUIDs are NOT masked. Best-effort, not a
+// guarantee: marking values sensitive remains the source system's job.
+var secretPatterns = []*regexp.Regexp{
+	// PEM private key blocks (RSA/EC/OPENSSH/PGP/…).
+	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`),
+	// AWS access key IDs: AKIA/ASIA + 16 upper-alnum (20 chars total).
+	regexp.MustCompile(`(?:AKIA|ASIA)[0-9A-Z]{16}`),
+	// JSON Web Tokens (header.payload.signature; header always starts "eyJ").
+	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+}
+
+// bearerRe masks the token after an Authorization "Bearer" scheme, keeping the
+// scheme word so the surrounding text still reads sensibly.
+var bearerRe = regexp.MustCompile(`(?i)(bearer\s+)[\w.~+/=-]+`)
+
+// scrubSecrets replaces high-precision secret patterns in a string with the
+// redaction marker. Applied to every logged string value when redaction is on.
+func scrubSecrets(s string) string {
+	for _, re := range secretPatterns {
+		s = re.ReplaceAllString(s, redactedMarker)
+	}
+	return bearerRe.ReplaceAllString(s, "${1}"+redactedMarker)
+}
+
 // prepare returns v normalised for logging, with sensitive scalar values masked
 // when redaction is enabled. Returns v unchanged when redaction is off or v is
 // nil. Best-effort: if v can't be round-tripped through JSON, it's logged as-is.
@@ -161,7 +196,9 @@ func (r *Recorder) prepare(v any) any {
 
 // redactValue masks scalar values under sensitive keys but recurses into maps
 // and slices, so reference structures (e.g. a secretRef's name/namespace) are
-// preserved while inline credential *values* are masked.
+// preserved while inline credential *values* are masked. Every string value not
+// already whole-masked by a sensitive key is additionally run through
+// scrubSecrets to catch high-precision secret shapes embedded in error text.
 func redactValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -178,6 +215,8 @@ func redactValue(v any) any {
 			t[i] = redactValue(t[i])
 		}
 		return t
+	case string:
+		return scrubSecrets(t)
 	default:
 		return v
 	}

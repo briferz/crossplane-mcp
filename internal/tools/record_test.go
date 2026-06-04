@@ -147,6 +147,79 @@ func TestRecorderRedaction(t *testing.T) {
 
 func contains(s, sub string) bool { return bytes.Contains([]byte(s), []byte(sub)) }
 
+// TestScrubSecrets covers the high-precision content scrub: it masks credential
+// material embedded in a string value while leaving innocuous identifiers
+// (ARNs, resource IDs, request UUIDs, account numbers) intact.
+func TestScrubSecrets(t *testing.T) {
+	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqh\n-----END RSA PRIVATE KEY-----" //nolint:gosec // G101: synthetic test fixture, not a real key
+	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+
+	masked := map[string]string{
+		"pem":    pem,
+		"awskey": "credentials AKIAIOSFODNN7EXAMPLE rejected",
+		"jwt":    "id_token=" + jwt,
+		"bearer": "Authorization: Bearer abc.def-123_ZZ",
+	}
+	for name, in := range masked {
+		if got := scrubSecrets(in); !contains(got, redactedMarker) {
+			t.Errorf("%s: expected redaction, got %q", name, got)
+		}
+	}
+	if contains(scrubSecrets(pem), "MIIEvQ") {
+		t.Error("PEM key body leaked through scrub")
+	}
+	if got := scrubSecrets("Authorization: Bearer abc.def-123"); !contains(got, "Bearer "+redactedMarker) {
+		t.Errorf("bearer scheme word should survive, token masked: %q", got)
+	}
+
+	// False-positive guards: these are NOT secrets and must pass through verbatim.
+	keep := []string{
+		"arn:aws:iam::123456789012:role/MyRole",
+		"i-0abc123def4567890",
+		"a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"Error: failed to create bucket: AccessDenied",
+		"account 123456789012 is denied",
+		"on main.tf line 42, in resource \"aws_s3_bucket\" \"this\"",
+	}
+	for _, in := range keep {
+		if got := scrubSecrets(in); got != in {
+			t.Errorf("over-redacted identifier %q -> %q", in, got)
+		}
+	}
+}
+
+// TestRecorderContentScrub confirms the content scrub reaches nested string
+// values (e.g. decodedErrors/reasons slices), preserves the surrounding
+// actionable text, and is gated by --log-redact.
+func TestRecorderContentScrub(t *testing.T) {
+	out := map[string]any{
+		"suspects": []any{
+			map[string]any{
+				"decodedErrors": []any{"Error: bad creds AKIAIOSFODNN7EXAMPLE on main.tf line 3"},
+				"reasons":       []any{"Synced: ReconcileError — Authorization: Bearer tok.en-123"},
+			},
+		},
+	}
+	var on bytes.Buffer
+	(&Recorder{w: &on, redact: true}).record("diagnose", 0, nil, out, nil)
+	s := on.String()
+	if contains(s, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("AWS key in decodedErrors not scrubbed: %s", s)
+	}
+	if !contains(s, "on main.tf line 3") {
+		t.Errorf("surrounding actionable text over-redacted: %s", s)
+	}
+	if contains(s, "tok.en-123") {
+		t.Errorf("bearer token in reasons not scrubbed: %s", s)
+	}
+
+	var off bytes.Buffer
+	(&Recorder{w: &off, redact: false}).record("diagnose", 0, nil, out, nil)
+	if !contains(off.String(), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("redact:false must keep content verbatim: %s", off.String())
+	}
+}
+
 // TestRecorderConcurrent guards the mutex: concurrent records (and a racing
 // Close) must not interleave or race. Run with -race.
 func TestRecorderConcurrent(t *testing.T) {
