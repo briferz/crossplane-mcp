@@ -115,6 +115,12 @@ When the latest condition is a transient transport error (`unexpected EOF`,
 `connection reset`, …) but a composition error keeps recurring, `diagnose`
 surfaces that persistent root cause rather than the flake.
 
+For `provider-terraform` / OpenTofu resources, `diagnose` also decodes the
+base64+gzip error blob (the `echo "…" | base64 -d | gunzip` hint TF prints) and
+surfaces the actionable `Error: … on main.tf line NN` in a `decodedErrors`
+field — boilerplate trimmed and token-light — so the real cause is in front of
+the agent without shelling out.
+
 ## Flags
 
 | Flag | Default | Description |
@@ -152,9 +158,12 @@ Disable masking with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
 
 > **Sensitivity:** masking is **heuristic and key-based** — it can miss a secret
 > stored under an unexpected key, and it does not scrub provider *error* text
-> (which may contain identifiers like account IDs or ARNs). The server never
-> reads Kubernetes Secret objects. Treat the log as potentially sensitive and
-> **review it before sharing off a machine that touches production.**
+> (which may contain identifiers like account IDs or ARNs). Decoded
+> `provider-terraform`/OpenTofu errors (`decodedErrors`) are surfaced and logged
+> verbatim for the same reason and are likewise not scrubbed — values that must
+> stay hidden should be marked `sensitive` in the Terraform/OpenTofu config. The
+> server never reads Kubernetes Secret objects. Treat the log as potentially
+> sensitive and **review it before sharing off a machine that touches production.**
 
 ## Development
 

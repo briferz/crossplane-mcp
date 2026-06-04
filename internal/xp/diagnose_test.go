@@ -343,6 +343,68 @@ func TestDiagnoseEventsFetchError(t *testing.T) {
 	}
 }
 
+// TestDiagnoseDecodedErrorsOnDeepLeaf confirms a base64+gzip OpenTofu blob in a
+// deep leaf's Synced condition is decoded into DecodedErrors while the verbatim
+// condition (including the literal "… | base64 -d | gunzip" hint) stays in
+// Reasons untouched.
+func TestDiagnoseDecodedErrorsOnDeepLeaf(t *testing.T) {
+	hint := tofuHint(gzipB64(t, "Error: failed to create\n  on main.tf line 42"))
+	leaf := node(2, "Workspace", "ws",
+		[]Condition{cond("Synced", "False", "ReconcileError", hint)})
+	mid := node(1, "XThing", "x", []Condition{cond("Ready", "False", "Waiting", "")}, leaf)
+	root := node(0, "App", "a", []Condition{cond("Ready", "False", "Waiting", "")}, mid)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
+
+	top := d.Suspects[0]
+	if top.Kind != "Workspace" {
+		t.Fatalf("expected deepest Workspace as top suspect, got %s", top.Kind)
+	}
+	if len(top.DecodedErrors) != 1 {
+		t.Fatalf("expected 1 decoded error on the leaf, got %d: %v", len(top.DecodedErrors), top.DecodedErrors)
+	}
+	if !strings.Contains(top.DecodedErrors[0], "Error: failed to create") ||
+		!strings.Contains(top.DecodedErrors[0], "on main.tf line 42") {
+		t.Errorf("decoded error missing actionable content: %q", top.DecodedErrors[0])
+	}
+	// The verbatim hint must survive untouched in Reasons (never-truncate).
+	if !strings.Contains(strings.Join(top.Reasons, " | "), `base64 -d | gunzip`) {
+		t.Errorf("verbatim blob hint must remain in Reasons, got %v", top.Reasons)
+	}
+}
+
+// TestDiagnoseDecodedErrorsCrossSuspectDedup confirms a blob mirrored up the
+// composite chain is surfaced once — on the first (deepest) suspect — not
+// repeated on every affected suspect.
+func TestDiagnoseDecodedErrorsCrossSuspectDedup(t *testing.T) {
+	hint := tofuHint(gzipB64(t, "Error: shared root\n  on main.tf line 7"))
+	leaf := node(2, "Workspace", "ws",
+		[]Condition{cond("Synced", "False", "ReconcileError", hint)})
+	mid := node(1, "XThing", "x",
+		[]Condition{cond("Synced", "False", "ReconcileError", hint)}, leaf)
+	root := node(0, "App", "a", []Condition{cond("Ready", "False", "Waiting", "")}, mid)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
+
+	if len(d.Suspects[0].DecodedErrors) != 1 {
+		t.Fatalf("deepest suspect should carry the decoded error, got %v", d.Suspects[0].DecodedErrors)
+	}
+	if len(d.Suspects[1].DecodedErrors) != 0 {
+		t.Errorf("identical blob should be deduped across suspects, got %v", d.Suspects[1].DecodedErrors)
+	}
+}
+
+// TestDiagnoseNoBlobDecodedErrorsNil confirms a suspect without a blob carries
+// no DecodedErrors (omitempty keeps non-TF output byte-identical).
+func TestDiagnoseNoBlobDecodedErrorsNil(t *testing.T) {
+	leaf := node(0, "Bucket", "b",
+		[]Condition{cond("Synced", "False", "ReconcileError", "AccessDenied: invalid credentials")})
+	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
+	if d.Suspects[0].DecodedErrors != nil {
+		t.Errorf("expected nil DecodedErrors without a blob, got %v", d.Suspects[0].DecodedErrors)
+	}
+}
+
 func TestFlatten(t *testing.T) {
 	root := node(0, "App", "app",
 		[]Condition{cond("Ready", "True", "", "")},

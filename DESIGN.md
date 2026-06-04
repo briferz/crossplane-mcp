@@ -183,6 +183,15 @@ servers and over `trace`. Pseudo-logic:
    **event** recurs with a high count, surface that recurring event as the root
    cause instead — and always surface the dominant recurring event. Avoids
    chasing a phantom network error over the persistent bug behind it (#24).
+7. **Decode provider blobs:** when a condition/event carries a
+   `provider-terraform`/OpenTofu `echo "…" | base64 -d | gunzip` hint, decode the
+   base64+gzip blob and surface its actionable `Error:`/`Summary:` lines in a
+   `decodedErrors` field (#24). Bounded (256 KiB in / 4 MiB out, single gzip
+   member, keep-partial on a truncated stream), token-light (`[DEBUG]`/`[TRACE]`/
+   OTEL boilerplate trimmed, 40-line budget, deduped within and across suspects),
+   and **additive** — the verbatim condition message (hint included) is left
+   untouched in `reasons`. Decoded text is not scrubbed; `sensitive`-marking is
+   the TF/OpenTofu config's job.
 
 ---
 

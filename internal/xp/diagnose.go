@@ -29,14 +29,25 @@ type EventFetcher interface {
 
 // Suspect is a resource flagged as a likely cause of a problem.
 type Suspect struct {
-	APIVersion string      `json:"apiVersion"`
-	Kind       string      `json:"kind"`
-	Name       string      `json:"name"`
-	Namespace  string      `json:"namespace,omitempty"`
-	Depth      int         `json:"depth"`
-	Health     Health      `json:"health"`
-	Reasons    []string    `json:"reasons,omitempty"`
-	Events     []k8s.Event `json:"events,omitempty"`
+	APIVersion string   `json:"apiVersion"`
+	Kind       string   `json:"kind"`
+	Name       string   `json:"name"`
+	Namespace  string   `json:"namespace,omitempty"`
+	Depth      int      `json:"depth"`
+	Health     Health   `json:"health"`
+	Reasons    []string `json:"reasons,omitempty"`
+	// DecodedErrors carries the actionable provider error decoded from a
+	// provider-terraform/OpenTofu "… | base64 -d | gunzip" hint embedded in a
+	// condition (or recurring event) message: the base64+gzip blob is decoded
+	// and reduced to its Error:/Summary: lines, verbatim and never
+	// substring-truncated. Like all provider error text it is NOT scrubbed for
+	// inline identifiers (account IDs, ARNs) or a credential a provider rendered
+	// into its error, and is written unmasked to --log-file; values that should
+	// be hidden must be marked sensitive in the Terraform/OpenTofu config. The
+	// server never reads Secret objects. Empty when no hint is present or the
+	// blob cannot be decoded.
+	DecodedErrors []string    `json:"decodedErrors,omitempty"`
+	Events        []k8s.Event `json:"events,omitempty"`
 }
 
 // Diagnosis is the result of analysing a Crossplane tree.
@@ -93,6 +104,10 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	}
 
 	var rootEvents []k8s.Event // the root suspect's full (untrimmed) events
+	// seen dedups byte-identical decoded provider errors across suspects in this
+	// call: the same recurring TF blob mirrors up the composite chain, so it is
+	// surfaced once (on the first/deepest suspect that carries it).
+	seen := map[string]bool{}
 	for i, n := range suspects {
 		if i >= maxSuspects {
 			break
@@ -119,8 +134,14 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		// window — and, when the condition is just a transport flake, lead the
 		// reasons (see reasonsWithEvent). Surface only a trimmed set to stay
 		// token-light.
-		s.Reasons = reasonsWithEvent(blockingMessages(n.Conditions), events)
+		condMsgs := blockingMessages(n.Conditions)
+		s.Reasons = reasonsWithEvent(condMsgs, events)
 		s.Events = trimEvents(events)
+		// Additively surface any decoded provider-terraform/OpenTofu error blob.
+		// The verbatim condition message stays untouched in Reasons (the literal
+		// "… | base64 -d | gunzip" hint included); this only adds the decoded,
+		// actionable form alongside it.
+		s.DecodedErrors = decodeTFErrors(condMsgs, events, seen)
 		d.Suspects = append(d.Suspects, s)
 	}
 

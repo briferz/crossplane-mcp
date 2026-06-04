@@ -22,9 +22,12 @@ import (
 // so inline credentials in a resource spec are not written verbatim. Masking is
 // heuristic and key-based, though: it can miss a secret stored under an
 // unexpected key and does not mask provider error text (which may contain
-// identifiers like account IDs or ARNs). The server never reads Kubernetes
-// Secret objects. Treat the log as potentially sensitive and review it before
-// sharing off a machine that touches production.
+// identifiers like account IDs or ARNs) — including the decoded
+// provider-terraform/OpenTofu error surfaced under decodedErrors, which is
+// logged verbatim and not scrubbed (it may carry provider-rendered identifiers
+// or inline credentials). The server never reads Kubernetes Secret objects.
+// Treat the log as potentially sensitive and review it before sharing off a
+// machine that touches production.
 type Recorder struct {
 	mu     sync.Mutex
 	w      io.Writer
