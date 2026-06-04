@@ -433,6 +433,22 @@ func TestDecodeBlob_OverflowValidUTF8(t *testing.T) {
 	}
 }
 
+func TestDecodeBlob_NonOverflowInvalidUTF8Sanitized(t *testing.T) {
+	// A small (non-overflow) stream carrying invalid UTF-8 bytes must still
+	// decode to valid UTF-8 so decodedErrors never emits U+FFFD mojibake.
+	payload := string([]byte{'E', 'r', 'r', 'o', 'r', ':', ' ', 'a', 'b', 0xff, 0xfe, 'c', 'd'})
+	got, ok := decodeBlob(gzipB64(t, payload))
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("decoded output must be valid UTF-8, got %q", got)
+	}
+	if !strings.Contains(got, "Error: ab") || !strings.Contains(got, "cd") {
+		t.Errorf("valid content must be preserved, got %q", got)
+	}
+}
+
 func TestDecodeTFErrors_DedupConditionAndEvent(t *testing.T) {
 	b64 := gzipB64(t, "Error: boom\n  on main.tf line 5")
 	msg := tofuHint(b64)

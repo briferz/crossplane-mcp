@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -183,17 +182,15 @@ func decodeBlob(b64 string) (decoded string, ok bool) {
 	overflow := false
 	if len(out) > maxDecompressedBytes {
 		out = out[:maxDecompressedBytes]
-		// The byte-boundary cut may split a trailing multibyte rune; drop it so
-		// the decoded string stays valid UTF-8 (json would emit U+FFFD otherwise).
-		for len(out) > 0 && !utf8.Valid(out) {
-			out = out[:len(out)-1]
-		}
 		overflow = true
 	}
 	if len(out) == 0 {
 		return "", false
 	}
-	s := string(out)
+	// Provider output is UTF-8 text; drop any invalid byte sequences — a rune
+	// split by the overflow byte-cut, or stray bytes in a malformed stream — so
+	// the decoded string stays valid UTF-8 (json would otherwise emit U+FFFD).
+	s := strings.ToValidUTF8(string(out), "")
 	switch {
 	case overflow:
 		s += "\n" + truncationMarker
