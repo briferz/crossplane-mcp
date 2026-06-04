@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -40,9 +41,90 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name: "list_unhealthy",
+		Description: "Triage the cluster: find broken Crossplane resources without knowing their names. " +
+			"Lists composite resources (XRs) and claims and returns only those whose Ready/Synced condition " +
+			"is not True (by default), each as a tiny row {apiVersion, kind, name, namespace, category, " +
+			"state, ready, synced} ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
+			"failing?\", then feed an item into diagnose for the root-cause tree, or get_resource for one " +
+			"resource's detail. Output is flat, capped, and ordered most-actionable first (Blocked before " +
+			"Pending), with no condition messages/events. Omitting namespace scans cluster-wide (needs " +
+			"cluster read); set namespace to scope to one namespace (the RBAC-safe path; cluster-scoped v1 " +
+			"XRs are then skipped). Forbidden API groups/namespaces are reported in notes, never failing the call.",
+	}, recorded(rec, "list_unhealthy", listUnhealthyHandler(cl)))
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_contexts",
 		Description: "List the available kubeconfig contexts (empty when running in-cluster).",
 	}, recorded(rec, "list_contexts", contextsHandler(cl)))
+}
+
+// --- list_unhealthy ---
+
+type ListUnhealthyInput struct {
+	Namespace      string `json:"namespace,omitempty" jsonschema:"limit the scan to one namespace (namespaced XRs/claims only); omit to scan cluster-wide where RBAC allows. Cluster-scoped v1 XRs are skipped when this is set"`
+	Category       string `json:"category,omitempty" jsonschema:"which Crossplane discovery category to scan: composite (XRs), claim (v1 claims), or managed (provider managed resources). Omit to scan composite and claim"`
+	Kind           string `json:"kind,omitempty" jsonschema:"only return resources of this kind (case-insensitive), e.g. XPostgreSQLInstance or a Claim kind"`
+	IncludeHealthy bool   `json:"includeHealthy,omitempty" jsonschema:"also include Ready resources; default false returns only not-Ready/not-Synced ones"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"max items to return (default 100, hard cap 500); truncated is true in the output when more matched"`
+}
+
+type ListUnhealthyOutput struct {
+	Items     []xp.UnhealthyItem  `json:"items,omitempty"`
+	Summary   xp.UnhealthySummary `json:"summary"`
+	Scanned   int                 `json:"scanned"`
+	Truncated bool                `json:"truncated,omitempty"`
+	Notes     []string            `json:"notes,omitempty"`
+}
+
+const (
+	defaultListLimit = 100
+	maxListLimit     = 500
+)
+
+func listUnhealthyHandler(cl *k8s.Client) mcp.ToolHandlerFor[ListUnhealthyInput, *ListUnhealthyOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListUnhealthyInput) (*mcp.CallToolResult, *ListUnhealthyOutput, error) {
+		cats := []string{k8s.CategoryComposite, k8s.CategoryClaim}
+		if c := strings.ToLower(strings.TrimSpace(in.Category)); c != "" {
+			if c != k8s.CategoryComposite && c != k8s.CategoryClaim && c != k8s.CategoryManaged {
+				return nil, nil, fmt.Errorf("unknown category %q; want composite, claim, or managed", c)
+			}
+			cats = []string{c}
+		}
+		kinds, notes, err := cl.DiscoverComposite(cats...)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(kinds) == 0 {
+			notes = append(notes, "no resource types found for categories "+strings.Join(cats, ", ")+
+				" (is Crossplane installed, and do you have discovery access?)")
+		}
+
+		res := cl.ListAll(ctx, kinds, in.Namespace)
+		built := xp.BuildUnhealthy(res.Objects, xp.UnhealthyParams{
+			Kind:           in.Kind,
+			IncludeHealthy: in.IncludeHealthy,
+			Limit:          clampLimit(in.Limit),
+		})
+		return nil, &ListUnhealthyOutput{
+			Items:     built.Items,
+			Summary:   built.Summary,
+			Scanned:   built.Scanned,
+			Truncated: built.Truncated,
+			Notes:     append(notes, res.Notes...),
+		}, nil
+	}
+}
+
+func clampLimit(n int) int {
+	switch {
+	case n <= 0:
+		return defaultListLimit
+	case n > maxListLimit:
+		return maxListLimit
+	default:
+		return n
+	}
 }
 
 // --- diagnose ---
