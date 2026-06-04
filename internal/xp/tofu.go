@@ -44,10 +44,20 @@ const (
 	// keepFirst is how many leading lines to keep when the selection overflows
 	// maxActionableLines; the remainder of the budget is kept from the tail.
 	keepFirst = 4
+	// maxLineRunes caps a single emitted line. The line-count budget alone
+	// doesn't bound output size: an OpenTofu Error: body can carry a multi-MB
+	// inline JSON/HTTP response on ONE line, which would otherwise pass through
+	// whole (up to the 4 MiB decompress cap) and bloat the response. A longer
+	// line is cut on a rune boundary with an explicit marker. This trims only
+	// the derived decodedErrors output — the verbatim condition message stays
+	// byte-identical in reasons (the never-truncate invariant is about that
+	// message, not this derived field).
+	maxLineRunes = 4000
 
 	truncationMarker = "[crossplane-mcp: decoded output truncated at 4 MiB]"
 	incompleteMarker = "[crossplane-mcp: decoded output incomplete]"
 	elisionFmt       = "... %d line(s) elided (run the echo | base64 -d | gunzip hint for the full output) ..."
+	lineTruncMarker  = " …[line truncated; run the echo | base64 -d | gunzip hint for the full line]"
 )
 
 // tfBlobRe matches the `echo "<base64>" | base64 -d | gunzip` hint. The capture
@@ -219,7 +229,19 @@ func extractActionable(decoded string) []string {
 	if allWhitespace(kept) {
 		return nil
 	}
-	return kept
+	return capLineRunes(kept)
+}
+
+// capLineRunes bounds each line at maxLineRunes, cutting a longer one on a rune
+// boundary (never mid-rune) and appending lineTruncMarker so a single
+// pathological line can't defeat the line-count budget.
+func capLineRunes(lines []string) []string {
+	for i, l := range lines {
+		if r := []rune(l); len(r) > maxLineRunes {
+			lines[i] = string(r[:maxLineRunes]) + lineTruncMarker
+		}
+	}
+	return lines
 }
 
 // applyBudget caps a selection at maxActionableLines lines, keeping the first

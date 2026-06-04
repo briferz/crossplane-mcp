@@ -39,8 +39,11 @@ type Suspect struct {
 	// DecodedErrors carries the actionable provider error decoded from a
 	// provider-terraform/OpenTofu "… | base64 -d | gunzip" hint embedded in a
 	// condition (or recurring event) message: the base64+gzip blob is decoded
-	// and reduced to its Error:/Summary: lines, verbatim and never
-	// substring-truncated. Like all provider error text it is NOT scrubbed for
+	// and reduced to its Error:/Summary: lines (or the trailing non-log lines
+	// when no such marker is present), kept whole — except that a single
+	// pathological line is capped with an explicit marker pointing back to the
+	// shell hint, to stay token-light. Like all provider error text it is NOT
+	// scrubbed for
 	// inline identifiers (account IDs, ARNs) or a credential a provider rendered
 	// into its error, and is written unmasked to --log-file; values that should
 	// be hidden must be marked sensitive in the Terraform/OpenTofu config. The

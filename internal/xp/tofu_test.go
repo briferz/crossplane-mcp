@@ -205,6 +205,54 @@ func TestExtractActionable_CRLFTrimmedIndentationPreserved(t *testing.T) {
 	}
 }
 
+func TestExtractActionable_LongLineCapped(t *testing.T) {
+	// A single huge line (e.g. an Error: with a multi-KB inline body) must be
+	// capped so the line-count budget can't be defeated by one line.
+	long := "Error: " + strings.Repeat("x", 10000)
+	got := extractActionable(long)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(got))
+	}
+	if r := []rune(got[0]); len(r) > maxLineRunes+len([]rune(lineTruncMarker)) {
+		t.Errorf("line not capped: %d runes", len(r))
+	}
+	if !strings.HasPrefix(got[0], "Error: x") || !strings.HasSuffix(got[0], lineTruncMarker) {
+		t.Errorf("capped line should keep the head and carry the marker: %.40q…", got[0])
+	}
+	// Multibyte safety: a cut must land on a rune boundary, not split a rune.
+	box := strings.Repeat("│", 8000) // 3 bytes each
+	if got := extractActionable("Error: " + box); !strings.HasSuffix(got[0], lineTruncMarker) {
+		t.Error("multibyte line should cap cleanly")
+	}
+}
+
+func TestDecodeTFErrors_BlobInEventOnly(t *testing.T) {
+	// The blob lives only in an event message; the condition is plain text.
+	got := decodeTFErrors(
+		[]string{"Synced: ReconcileError — cannot apply tofu configuration"},
+		[]k8s.Event{{Message: tofuHint(gzipB64(t, "Error: from-event\n  on x.tf line 1"))}},
+		map[string]bool{},
+	)
+	if len(got) != 1 || !strings.Contains(got[0], "Error: from-event") {
+		t.Fatalf("event-only blob must decode to 1 entry, got %v", got)
+	}
+}
+
+func TestDecodeTFErrors_DistinctBlobsBothSurface(t *testing.T) {
+	// Two DISTINCT blobs must both surface — the dedup seen-set must only
+	// suppress byte-identical duplicates, never distinct errors.
+	a := tofuHint(gzipB64(t, "Error: alpha\n  on a.tf line 1"))
+	b := tofuHint(gzipB64(t, "Error: beta\n  on b.tf line 2"))
+	got := decodeTFErrors([]string{"cond " + a, "cond " + b}, nil, map[string]bool{})
+	if len(got) != 2 {
+		t.Fatalf("two distinct blobs must both surface, got %d: %v", len(got), got)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "Error: alpha") || !strings.Contains(joined, "Error: beta") {
+		t.Errorf("both distinct errors must be present: %v", got)
+	}
+}
+
 func TestTFBlobPayloads_QuoteAndCommandVariants(t *testing.T) {
 	b64 := gzipB64(t, "Error: x")
 	variants := []string{
