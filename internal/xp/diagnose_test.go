@@ -2,17 +2,33 @@ package xp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
 
-// stubEvents is an EventFetcher that records uids it was asked about.
-type stubEvents struct{ asked []string }
+// stubEvents is an EventFetcher for tests. It records the uids and limit it was
+// asked about, and returns a configurable event set: when events is nil it falls
+// back to a single benign Warning with Count 0 (below recurrenceThreshold, so it
+// never triggers event attribution — keeping pre-existing tests unchanged).
+type stubEvents struct {
+	asked     []string
+	lastLimit int
+	events    []k8s.Event
+	err       error
+}
 
-func (s *stubEvents) Events(_ context.Context, _, uid string, _ int) ([]k8s.Event, error) {
+func (s *stubEvents) Events(_ context.Context, _, uid string, limit int) ([]k8s.Event, error) {
 	s.asked = append(s.asked, uid)
+	s.lastLimit = limit
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.events != nil {
+		return s.events, nil
+	}
 	return []k8s.Event{{Type: "Warning", Reason: "Stub", Message: "for " + uid}}, nil
 }
 
@@ -138,6 +154,190 @@ func TestDiagnoseBlockedRanksAbovePending(t *testing.T) {
 	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
 	if d.Suspects[0].Kind != "XStorage" {
 		t.Errorf("expected Blocked XStorage ranked first over deeper Pending Bucket, got %s", d.Suspects[0].Kind)
+	}
+}
+
+// compEvent is the recurring composition/validation event from the issue #24
+// real-world incident (count ~2666), used across the attribution tests.
+func compEvent(count int64) k8s.Event {
+	return k8s.Event{
+		Type:    "Warning",
+		Reason:  "ComposeResources",
+		Count:   count,
+		Message: "cannot compose resources: cannot apply composite resource status: status.conditions[1].lastTransitionTime: Required value",
+	}
+}
+
+// TestDiagnoseAttributesRecurringEventOverFlake is the headline issue #24 P1
+// regression: when the latest condition is a transient transport flake but a
+// composition event recurs thousands of times, the recurring event — not the
+// flake — must be reported as the cause.
+func TestDiagnoseAttributesRecurringEventOverFlake(t *testing.T) {
+	leaf := node(0, "XApp", "app",
+		[]Condition{cond("Synced", "False", "ReconcileError", "rpc error: code = Unavailable desc = transport is closing")})
+	stub := &stubEvents{events: []k8s.Event{compEvent(2666)}}
+	d := Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+
+	if !strings.Contains(d.Summary, "ComposeResources (x2666)") {
+		t.Errorf("summary should surface the recurring event; got: %s", d.Summary)
+	}
+	if !strings.Contains(d.Summary, "Required value") {
+		t.Errorf("summary should carry the composition error message; got: %s", d.Summary)
+	}
+	if strings.Contains(d.Summary, "rpc error") {
+		t.Errorf("summary should not lead with the transport flake; got: %s", d.Summary)
+	}
+	// The override path surfaces the event once and must NOT also append the
+	// "Recurring event:" tail (that is for the condition-led path only).
+	if strings.Contains(d.Summary, "Recurring event:") {
+		t.Errorf("override summary must not also append the recurring-event tail; got: %s", d.Summary)
+	}
+	// The full composition message survives untruncated in the summary.
+	if !strings.Contains(d.Summary, compEvent(2666).Message) {
+		t.Errorf("summary should carry the untruncated event message; got: %s", d.Summary)
+	}
+	if len(d.Suspects[0].Reasons) == 0 || !strings.HasPrefix(d.Suspects[0].Reasons[0], "event: ComposeResources") {
+		t.Errorf("recurring event should be prepended to reasons; got: %v", d.Suspects[0].Reasons)
+	}
+	// The transport condition is demoted, not hidden.
+	if !strings.Contains(strings.Join(d.Suspects[0].Reasons, " | "), "rpc error: code = Unavailable") {
+		t.Errorf("transport condition should still appear in reasons; got: %v", d.Suspects[0].Reasons)
+	}
+}
+
+// TestDiagnoseSurfacesRecurringEventWhenConditionWins covers requirement 3: even
+// when a genuine (non-flake) condition leads, a qualifying recurring event is
+// still surfaced so a hot loop behind the symptom is never missed.
+func TestDiagnoseSurfacesRecurringEventWhenConditionWins(t *testing.T) {
+	leaf := node(0, "Bucket", "b",
+		[]Condition{cond("Synced", "False", "ReconcileError", "AccessDenied: invalid credentials")})
+	stub := &stubEvents{events: []k8s.Event{compEvent(42)}}
+	d := Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+
+	if !strings.Contains(d.Summary, "AccessDenied: invalid credentials") {
+		t.Errorf("genuine condition should lead the summary; got: %s", d.Summary)
+	}
+	if !strings.Contains(d.Summary, "Recurring event: ComposeResources (x42).") {
+		t.Errorf("summary should append a recurring-event pointer; got: %s", d.Summary)
+	}
+	if !strings.HasPrefix(d.Suspects[0].Reasons[0], "Synced:") {
+		t.Errorf("genuine condition should remain the first reason; got: %v", d.Suspects[0].Reasons)
+	}
+	if !strings.Contains(strings.Join(d.Suspects[0].Reasons, " | "), "event: ComposeResources (x42)") {
+		t.Errorf("event line should be appended to reasons; got: %v", d.Suspects[0].Reasons)
+	}
+}
+
+// TestDiagnoseNoRecurringEventUnchanged is the golden no-regression test: with
+// no qualifying event the summary and reasons are byte-identical to before.
+func TestDiagnoseNoRecurringEventUnchanged(t *testing.T) {
+	leaf := node(0, "Bucket", "b",
+		[]Condition{cond("Synced", "False", "ReconcileError", "AccessDenied: invalid credentials")})
+	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
+
+	if !strings.HasSuffix(d.Summary, "AccessDenied: invalid credentials") {
+		t.Errorf("summary should end with the condition message; got: %s", d.Summary)
+	}
+	if strings.Contains(d.Summary, "(x") || strings.Contains(d.Summary, "Recurring event") {
+		t.Errorf("no event annotation expected without a qualifying event; got: %s", d.Summary)
+	}
+	if len(d.Suspects[0].Reasons) != 1 || d.Suspects[0].Reasons[0] != "Synced: ReconcileError — AccessDenied: invalid credentials" {
+		t.Errorf("reasons should be the bare condition message; got: %v", d.Suspects[0].Reasons)
+	}
+}
+
+// TestDiagnoseBelowThresholdIgnored confirms a low-count event never overrides
+// or annotates the condition.
+func TestDiagnoseBelowThresholdIgnored(t *testing.T) {
+	leaf := node(0, "XApp", "app",
+		[]Condition{cond("Synced", "False", "ReconcileError", "context deadline exceeded")})
+	stub := &stubEvents{events: []k8s.Event{compEvent(3)}}
+	d := Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+
+	if !strings.Contains(d.Summary, "context deadline exceeded") {
+		t.Errorf("below-threshold event must not override the condition; got: %s", d.Summary)
+	}
+	if strings.Contains(d.Summary, "(x") || strings.Contains(d.Summary, "Recurring event") {
+		t.Errorf("below-threshold event must not be annotated; got: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseEventLimitRaised guards the widened event fetch window.
+func TestDiagnoseEventLimitRaised(t *testing.T) {
+	leaf := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "Err", "boom")})
+	stub := &stubEvents{}
+	Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+	if stub.lastLimit != eventLimit {
+		t.Errorf("expected events fetched with limit %d, got %d", eventLimit, stub.lastLimit)
+	}
+}
+
+// TestDiagnoseOrderingPreservedUnderRecurrence guards the hard constraint: event
+// recurrence must not reorder the deepest-first node ranking.
+func TestDiagnoseOrderingPreservedUnderRecurrence(t *testing.T) {
+	leaf := node(2, "Bucket", "my-bucket",
+		[]Condition{cond("Synced", "False", "ReconcileError", "AccessDenied")})
+	mid := node(1, "XStorage", "s",
+		[]Condition{cond("Ready", "False", "Waiting", "")}, leaf)
+	root := node(0, "App", "a",
+		[]Condition{cond("Ready", "False", "Waiting", "")}, mid)
+	stub := &stubEvents{events: []k8s.Event{compEvent(999)}}
+	d := Diagnose(context.Background(), stub, root, Stats{Nodes: 3}, false)
+	if got := d.Suspects[0]; got.Kind != "Bucket" || got.Depth != 2 {
+		t.Errorf("event recurrence must not reorder nodes; want depth-2 Bucket, got %s (depth %d)", got.Kind, got.Depth)
+	}
+}
+
+// TestDiagnoseTrimsSurfacedEvents confirms the response surfaces only a
+// token-light slice of events while always retaining the qualifying recurring
+// event — even when it is the oldest and falls outside the newest window — and
+// that it still drives attribution.
+func TestDiagnoseTrimsSurfacedEvents(t *testing.T) {
+	q := compEvent(2666)
+	q.Last = "2026-01-01T00:00:00Z" // oldest, so outside the newest-displayEvents window
+	many := []k8s.Event{
+		q,
+		{Type: "Normal", Reason: "S1", Count: 1, Last: "2026-01-01T01:01:00Z", Message: "ok"},
+		{Type: "Normal", Reason: "S2", Count: 1, Last: "2026-01-01T01:02:00Z", Message: "ok"},
+		{Type: "Normal", Reason: "S3", Count: 1, Last: "2026-01-01T01:03:00Z", Message: "ok"},
+		{Type: "Normal", Reason: "S4", Count: 1, Last: "2026-01-01T01:04:00Z", Message: "ok"},
+		{Type: "Normal", Reason: "S5", Count: 1, Last: "2026-01-01T01:05:00Z", Message: "ok"},
+		{Type: "Normal", Reason: "S6", Count: 1, Last: "2026-01-01T01:06:00Z", Message: "ok"},
+	}
+	leaf := node(0, "XApp", "app",
+		[]Condition{cond("Synced", "False", "ReconcileError", "context deadline exceeded")})
+	stub := &stubEvents{events: many}
+	d := Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+
+	if got := len(d.Suspects[0].Events); got > displayEvents+1 {
+		t.Errorf("surfaced events should be trimmed to ~%d, got %d", displayEvents, got)
+	}
+	found := false
+	for _, e := range d.Suspects[0].Events {
+		if e.Reason == "ComposeResources" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("qualifying event must be retained after trimming")
+	}
+	if !strings.Contains(d.Summary, "ComposeResources (x2666)") {
+		t.Errorf("trimmed-out qualifying event must still drive attribution; got: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseEventsFetchError confirms a failed events fetch degrades cleanly
+// to condition-only attribution.
+func TestDiagnoseEventsFetchError(t *testing.T) {
+	leaf := node(0, "Bucket", "b",
+		[]Condition{cond("Synced", "False", "ReconcileError", "AccessDenied: invalid credentials")})
+	stub := &stubEvents{err: errors.New("forbidden")}
+	d := Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
+	if len(d.Suspects[0].Events) != 0 {
+		t.Errorf("expected no events on fetch error, got %d", len(d.Suspects[0].Events))
+	}
+	if !strings.HasSuffix(d.Summary, "AccessDenied: invalid credentials") {
+		t.Errorf("summary should fall back to the condition on fetch error; got: %s", d.Summary)
 	}
 }
 
