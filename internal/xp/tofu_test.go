@@ -449,6 +449,15 @@ func TestDecodeBlob_NonOverflowInvalidUTF8Sanitized(t *testing.T) {
 	}
 }
 
+func TestDecodeBlob_AllInvalidUTF8Rejected(t *testing.T) {
+	// A blob whose content is entirely invalid UTF-8 sanitizes to empty and must
+	// surface no entry (not a content-free marker-only line).
+	got, ok := decodeBlob(gzipB64(t, string([]byte{0xff, 0xfe, 0xfd, 0xfc})))
+	if ok || got != "" {
+		t.Errorf("content-free blob must not be decoded, got ok=%v %q", ok, got)
+	}
+}
+
 func TestDecodeTFErrors_DedupConditionAndEvent(t *testing.T) {
 	b64 := gzipB64(t, "Error: boom\n  on main.tf line 5")
 	msg := tofuHint(b64)

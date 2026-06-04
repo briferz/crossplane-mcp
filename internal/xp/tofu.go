@@ -191,6 +191,9 @@ func decodeBlob(b64 string) (decoded string, ok bool) {
 	// split by the overflow byte-cut, or stray bytes in a malformed stream — so
 	// the decoded string stays valid UTF-8 (json would otherwise emit U+FFFD).
 	s := strings.ToValidUTF8(string(out), "")
+	if strings.TrimSpace(s) == "" {
+		return "", false // nothing decodable survived sanitization; surface no entry
+	}
 	switch {
 	case overflow:
 		s += "\n" + truncationMarker
