@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -220,8 +221,10 @@ func TestListAllForbiddenDegradesGracefully(t *testing.T) {
 	if len(res.Objects) != 2 {
 		t.Fatalf("expected 2 objects when one type is forbidden, got %d", len(res.Objects))
 	}
-	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "forbidden") {
-		t.Errorf("expected a forbidden note, got %v", res.Notes)
+	// Cluster-wide forbidden: the note should carry the namespace remediation hint.
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "forbidden") ||
+		!strings.Contains(res.Notes[0], "re-call with an explicit namespace") {
+		t.Errorf("expected a forbidden note with the namespace hint, got %v", res.Notes)
 	}
 }
 
@@ -256,10 +259,40 @@ func TestListAllSkipNotes(t *testing.T) {
 			return true, nil, apierrors.NewForbidden(forbidGVR, "", errors.New("rbac"))
 		})
 		res := cl.ListAll(context.Background(), kinds, "team-a")
-		if !hasNote(res.Notes, "in team-a") || !hasNote(res.Notes, "re-call with an explicit namespace") {
-			t.Errorf("expected forbidden-in-namespace note with remediation hint, got %v", res.Notes)
+		// A namespace was given, so the note must NOT suggest re-calling with one.
+		if !hasNote(res.Notes, "in team-a") || hasNote(res.Notes, "re-call with an explicit namespace") {
+			t.Errorf("forbidden-in-namespace note should name the namespace and omit the hint, got %v", res.Notes)
 		}
 	})
+}
+
+func TestListAllPaginates(t *testing.T) {
+	cl, kinds := listFixture(t)
+	calls := 0
+	cl.Dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "xapps", func(clienttesting.Action) (bool, runtime.Object, error) {
+		calls++
+		l := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{
+			*uobj("apps.example.org/v1", "XApp", "ns", "page"+strconv.Itoa(calls)),
+		}}
+		if calls == 1 {
+			l.SetContinue("more") // first page signals there is another
+		}
+		return true, l, nil
+	})
+
+	res := cl.ListAll(context.Background(), kinds, "")
+	if calls != 2 {
+		t.Errorf("expected ListAll to follow the Continue token (2 calls for xapps), got %d", calls)
+	}
+	xapps := 0
+	for _, o := range res.Objects {
+		if o.Object.GetKind() == "XApp" {
+			xapps++
+		}
+	}
+	if xapps != 2 {
+		t.Errorf("expected 2 XApp objects aggregated across pages, got %d", xapps)
+	}
 }
 
 func hasNote(notes []string, sub string) bool {

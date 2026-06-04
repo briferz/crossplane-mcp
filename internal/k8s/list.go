@@ -10,7 +10,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 )
+
+// listChunkSize bounds each List request, matching kubectl's default
+// --chunk-size. A single unbounded List of a large resource type can spike the
+// API server / etcd; chunking with a Continue token keeps the cluster (which we
+// may be pointed at in production) safe. Note this caps per-request size, not
+// the server's total in-memory result — that is bounded in practice by the
+// composite+claim default scope and the response cap.
+const listChunkSize = 500
 
 // Crossplane stamps XRD-generated CRDs with these Kubernetes discovery
 // categories — the mechanism behind `kubectl get composite/claim/managed`. We
@@ -129,27 +138,30 @@ func matchCategory(have, want []string) string {
 func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace string) ListResult {
 	var res ListResult
 	for _, k := range kinds {
-		ri := c.Dyn.Resource(k.GVR)
-		var (
-			list *unstructured.UnstructuredList
-			err  error
-		)
-		switch {
-		case k.Namespaced && namespace != "":
-			list, err = ri.Namespace(namespace).List(ctx, metav1.ListOptions{})
-		case !k.Namespaced && namespace != "":
+		// A namespace filter cannot scope a cluster-scoped resource.
+		if !k.Namespaced && namespace != "" {
 			res.Notes = append(res.Notes, fmt.Sprintf("skipped cluster-scoped %s: namespace filter set", k.Kind))
 			continue
-		default:
-			// Namespaced with no filter (all namespaces) or cluster-scoped.
-			list, err = ri.List(ctx, metav1.ListOptions{})
 		}
-		if err != nil {
-			res.Notes = append(res.Notes, listSkipNote(k, namespace, err))
-			continue
+		var lister dynamic.ResourceInterface = c.Dyn.Resource(k.GVR)
+		if k.Namespaced && namespace != "" {
+			lister = c.Dyn.Resource(k.GVR).Namespace(namespace)
 		}
-		for i := range list.Items {
-			res.Objects = append(res.Objects, Listed{Category: k.Category, Object: list.Items[i]})
+		// Page through with a Continue token so one huge resource type can't be
+		// fetched in a single unbounded List against the API server.
+		cont := ""
+		for {
+			list, err := lister.List(ctx, metav1.ListOptions{Limit: listChunkSize, Continue: cont})
+			if err != nil {
+				res.Notes = append(res.Notes, listSkipNote(k, namespace, err))
+				break
+			}
+			for i := range list.Items {
+				res.Objects = append(res.Objects, Listed{Category: k.Category, Object: list.Items[i]})
+			}
+			if cont = list.GetContinue(); cont == "" {
+				break
+			}
 		}
 	}
 	return res
@@ -159,11 +171,11 @@ func listSkipNote(k CompositeKind, namespace string, err error) string {
 	gr := k.GVR.GroupResource().String()
 	switch {
 	case apierrors.IsForbidden(err):
-		loc := ""
 		if namespace != "" {
-			loc = " in " + namespace
+			// A namespace was already given; suggesting one would be contradictory.
+			return fmt.Sprintf("skipped %s in %s: forbidden (RBAC)", gr, namespace)
 		}
-		return fmt.Sprintf("skipped %s%s: forbidden (RBAC); re-call with an explicit namespace if scanning cluster-wide", gr, loc)
+		return fmt.Sprintf("skipped %s: forbidden (RBAC); re-call with an explicit namespace to scope within your access", gr)
 	case apierrors.IsNotFound(err):
 		return fmt.Sprintf("skipped %s: not found (CRD removed between discover and list?)", gr)
 	default:
