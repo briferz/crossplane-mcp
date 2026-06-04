@@ -113,6 +113,12 @@ func (r *Recorder) record(name string, dur time.Duration, in, out any, callErr e
 	}
 	if callErr != nil {
 		rec.Error = callErr.Error()
+		// The error string bypasses prepare()/redactValue, so scrub it here — a
+		// provider/transport error can embed the same secret shapes (the case
+		// this scrub exists for).
+		if r.redact {
+			rec.Error = scrubSecrets(rec.Error)
+		}
 	} else {
 		rec.Output = r.prepare(out)
 	}
@@ -155,17 +161,24 @@ func sensitiveKey(k string) bool {
 // IDs, resource IDs, and request UUIDs are NOT masked. Best-effort, not a
 // guarantee: marking values sensitive remains the source system's job.
 var secretPatterns = []*regexp.Regexp{
-	// PEM private key blocks (RSA/EC/OPENSSH/PGP/…).
-	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`),
-	// AWS access key IDs: AKIA/ASIA + 16 upper-alnum (20 chars total).
-	regexp.MustCompile(`(?:AKIA|ASIA)[0-9A-Z]{16}`),
-	// JSON Web Tokens (header.payload.signature; header always starts "eyJ").
-	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+	// PEM private key blocks (RSA/EC/OPENSSH/PGP/…). The trailing [A-Z ]* admits
+	// label suffixes like PGP's "PRIVATE KEY BLOCK" while still excluding
+	// PUBLIC KEY / CERTIFICATE.
+	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----.*?-----END [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----`),
+	// AWS access key IDs: AKIA/ASIA + 16 upper-alnum (20 chars total). Word
+	// boundaries pin it to exactly the 20-char id (no partial mask of a longer token).
+	regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`),
+	// JSON Web Tokens (header.payload.signature; header always starts "eyJ", the
+	// high-precision anchor). Payload ≥1 char and signature ≥0 so a minimal-claim
+	// ("e30") or alg=none token is still masked.
+	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`),
 }
 
-// bearerRe masks the token after an Authorization "Bearer" scheme, keeping the
-// scheme word so the surrounding text still reads sensibly.
-var bearerRe = regexp.MustCompile(`(?i)(bearer\s+)[\w.~+/=-]+`)
+// bearerRe masks the token after an "Authorization: Bearer" header, keeping the
+// scheme so the line still reads sensibly. Anchored on "authorization:" so the
+// word "Bearer" in ordinary prose ("Bearer token is expired") is not treated as
+// a token prefix; a bare "Bearer <jwt>" is still caught by the JWT pattern.
+var bearerRe = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[\w.~+/=-]+`)
 
 // scrubSecrets replaces high-precision secret patterns in a string with the
 // redaction marker. Applied to every logged string value when redaction is on.

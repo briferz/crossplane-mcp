@@ -151,14 +151,20 @@ func contains(s, sub string) bool { return bytes.Contains([]byte(s), []byte(sub)
 // material embedded in a string value while leaving innocuous identifiers
 // (ARNs, resource IDs, request UUIDs, account numbers) intact.
 func TestScrubSecrets(t *testing.T) {
-	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqh\n-----END RSA PRIVATE KEY-----" //nolint:gosec // G101: synthetic test fixture, not a real key
+	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqh\n-----END RSA PRIVATE KEY-----"         //nolint:gosec // G101: synthetic test fixture, not a real key
+	pgp := "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQVYBGZ0dummy\n-----END PGP PRIVATE KEY BLOCK-----" //nolint:gosec // G101: synthetic test fixture, not a real key
 	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+	jwtMin := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.JIWT1_Db9Wiqgn-jwmNNDRBe2m25imsMo-ZqYaHBgK0" // minimal "{}" payload
+	jwtNone := "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9."                                           // alg=none, empty signature
 
 	masked := map[string]string{
-		"pem":    pem,
-		"awskey": "credentials AKIAIOSFODNN7EXAMPLE rejected",
-		"jwt":    "id_token=" + jwt,
-		"bearer": "Authorization: Bearer abc.def-123_ZZ",
+		"pem":      pem,
+		"pgp":      pgp,
+		"awskey":   "credentials AKIAIOSFODNN7EXAMPLE rejected",
+		"jwt":      "id_token=" + jwt,
+		"jwt-min":  "token " + jwtMin,
+		"jwt-none": "unsigned " + jwtNone,
+		"bearer":   "Authorization: Bearer abc.def-123_ZZ",
 	}
 	for name, in := range masked {
 		if got := scrubSecrets(in); !contains(got, redactedMarker) {
@@ -167,6 +173,9 @@ func TestScrubSecrets(t *testing.T) {
 	}
 	if contains(scrubSecrets(pem), "MIIEvQ") {
 		t.Error("PEM key body leaked through scrub")
+	}
+	if contains(scrubSecrets(pgp), "lQVYBGZ0dummy") {
+		t.Error("PGP key body leaked through scrub")
 	}
 	if got := scrubSecrets("Authorization: Bearer abc.def-123"); !contains(got, "Bearer "+redactedMarker) {
 		t.Errorf("bearer scheme word should survive, token masked: %q", got)
@@ -180,6 +189,11 @@ func TestScrubSecrets(t *testing.T) {
 		"Error: failed to create bucket: AccessDenied",
 		"account 123456789012 is denied",
 		"on main.tf line 42, in resource \"aws_s3_bucket\" \"this\"",
+		"Bearer token is expired",                    // no "Authorization:" prefix → not a token
+		"missing Bearer token in the request header", // prose, not a credential
+		"eyJshort.x.y",        // header <8 chars after eyJ → not a JWT
+		"com.example.service", // dotted, but no eyJ prefix
+		"-----BEGIN PGP PUBLIC KEY BLOCK-----\nabc\n-----END PGP PUBLIC KEY BLOCK-----", // PUBLIC, not PRIVATE
 	}
 	for _, in := range keep {
 		if got := scrubSecrets(in); got != in {
@@ -217,6 +231,28 @@ func TestRecorderContentScrub(t *testing.T) {
 	(&Recorder{w: &off, redact: false}).record("diagnose", 0, nil, out, nil)
 	if !contains(off.String(), "AKIAIOSFODNN7EXAMPLE") {
 		t.Errorf("redact:false must keep content verbatim: %s", off.String())
+	}
+}
+
+// TestRecorderErrorScrub confirms a secret embedded in a failed tool call's
+// error string is scrubbed (the error field bypasses prepare/redactValue, so
+// record() scrubs it directly), and that --log-redact=false keeps it verbatim.
+func TestRecorderErrorScrub(t *testing.T) {
+	secretErr := errors.New("auth failed: Authorization: Bearer sekrit.tok-1 using AKIAIOSFODNN7EXAMPLE")
+	var on bytes.Buffer
+	(&Recorder{w: &on, redact: true}).record("get_resource", 0, map[string]any{"kind": "X"}, nil, secretErr)
+	s := on.String()
+	if contains(s, "AKIAIOSFODNN7EXAMPLE") || contains(s, "sekrit.tok-1") {
+		t.Errorf("secret in error string not scrubbed: %s", s)
+	}
+	if !contains(s, "auth failed") {
+		t.Errorf("error context over-redacted: %s", s)
+	}
+
+	var off bytes.Buffer
+	(&Recorder{w: &off, redact: false}).record("get_resource", 0, nil, nil, secretErr)
+	if !contains(off.String(), "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("redact:false must keep the error verbatim: %s", off.String())
 	}
 }
 
