@@ -190,7 +190,9 @@ type Event struct {
 var eventsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}
 
 // Events returns recent events for the object with the given uid, sorted oldest
-// to newest and capped at limit (keeping the newest).
+// to newest and capped at limit (keeping the newest). A non-positive limit
+// returns all of them — the API server already lists every matching event, so
+// the cap only trims the returned slice, never the query.
 //
 // The query is scoped to namespace to stay within a namespace-scoped read-only
 // role rather than requiring cluster-wide list access on events. Events for

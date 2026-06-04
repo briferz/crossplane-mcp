@@ -262,13 +262,15 @@ func TestDiagnoseBelowThresholdIgnored(t *testing.T) {
 	}
 }
 
-// TestDiagnoseEventLimitRaised guards the widened event fetch window.
-func TestDiagnoseEventLimitRaised(t *testing.T) {
+// TestDiagnoseFetchesAllEvents guards that diagnose requests the full event set
+// (no cap) so attribution can't miss a recurring composition event evicted from
+// a capped, newest-first window.
+func TestDiagnoseFetchesAllEvents(t *testing.T) {
 	leaf := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "Err", "boom")})
 	stub := &stubEvents{}
 	Diagnose(context.Background(), stub, leaf, Stats{Nodes: 1}, false)
-	if stub.lastLimit != eventLimit {
-		t.Errorf("expected events fetched with limit %d, got %d", eventLimit, stub.lastLimit)
+	if stub.lastLimit != allEvents {
+		t.Errorf("expected diagnose to request all events (limit %d), got %d", allEvents, stub.lastLimit)
 	}
 }
 

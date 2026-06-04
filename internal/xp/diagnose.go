@@ -11,13 +11,15 @@ import (
 // maxSuspects caps how many blocking resources we fetch events for and return.
 const maxSuspects = 10
 
-// eventLimit caps events fetched per suspect. Wider than the few shown to a
-// human: a burst of distinct one-shot transport-flake events (each its own row)
-// can otherwise evict the aggregated high-count composition event from the
-// newest-N window, and that recurring event is exactly the root-cause signal
-// (see attribute / qualifyingEvent). Bounded — fetched only for the top
-// suspects, with no extra API calls.
-const eventLimit = 20
+// allEvents requests every event for a suspect from the fetcher (no cap). The
+// per-object set is small — the API server aggregates events by reason+message,
+// and the fetcher already lists them all regardless of limit (the limit only
+// trims the returned slice), so this adds no API cost. Fetching the full set is
+// what lets attribution find a recurring high-count composition event even when
+// a churn of newer one-shot transport flakes would otherwise evict it from a
+// capped, newest-first window. The response is trimmed separately (trimEvents)
+// to stay token-light.
+const allEvents = 0
 
 // EventFetcher supplies recent events for a resource by namespace+uid.
 // *k8s.Client satisfies it; tests use a stub.
@@ -105,7 +107,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		}
 		var events []k8s.Event
 		if ev != nil {
-			if got, err := ev.Events(ctx, n.Namespace, n.uid, eventLimit); err == nil {
+			if got, err := ev.Events(ctx, n.Namespace, n.uid, allEvents); err == nil {
 				events = got
 			}
 		}
