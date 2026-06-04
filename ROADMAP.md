@@ -56,7 +56,10 @@ These keep the project focused. They are deliberate, not "not yet."
 - Handles Crossplane v2 (namespaced XRs) and v1/LegacyCluster.
 - Read-only, token-light output; validated against a live v2 cluster.
 
-### Phase 2 — Discovery & schema (next)
+### Phase 2 — Discovery & schema (in progress)
+- ✅ `list_unhealthy` — cluster-wide triage: list not-Ready/not-Synced XRs and
+  claims (via Crossplane discovery categories) so an agent can find *what* to
+  `diagnose` without leaving the server. Shipped from real-world feedback (#24).
 - `list_providers` / `list_functions` — installed packages, revisions, health,
   and version skew.
 - `list_compositions` / `describe_composition` — including the function pipeline
