@@ -11,6 +11,16 @@ import (
 // maxSuspects caps how many blocking resources we fetch events for and return.
 const maxSuspects = 10
 
+// allEvents requests every event for a suspect from the fetcher (no cap). The
+// per-object set is small — the API server aggregates events by reason+message,
+// and the fetcher already lists them all regardless of limit (the limit only
+// trims the returned slice), so this adds no API cost. Fetching the full set is
+// what lets attribution find a recurring high-count composition event even when
+// a churn of newer one-shot transport flakes would otherwise evict it from a
+// capped, newest-first window. The response is trimmed separately (trimEvents)
+// to stay token-light.
+const allEvents = 0
+
 // EventFetcher supplies recent events for a resource by namespace+uid.
 // *k8s.Client satisfies it; tests use a stub.
 type EventFetcher interface {
@@ -82,6 +92,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		}
 	}
 
+	var rootEvents []k8s.Event // the root suspect's full (untrimmed) events
 	for i, n := range suspects {
 		if i >= maxSuspects {
 			break
@@ -93,21 +104,43 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			Namespace:  n.Namespace,
 			Depth:      n.depth,
 			Health:     n.Health,
-			Reasons:    blockingMessages(n.Conditions),
 		}
+		var events []k8s.Event
 		if ev != nil {
-			if events, err := ev.Events(ctx, n.Namespace, n.uid, 5); err == nil {
-				s.Events = events
+			if got, err := ev.Events(ctx, n.Namespace, n.uid, allEvents); err == nil {
+				events = got
 			}
 		}
+		if i == 0 {
+			rootEvents = events // the root's full events, for the summary below
+		}
+		// Build reasons from the full fetched set so a recurring composition
+		// event is found even when a burst of one-shot events fills the newest
+		// window — and, when the condition is just a transport flake, lead the
+		// reasons (see reasonsWithEvent). Surface only a trimmed set to stay
+		// token-light.
+		s.Reasons = reasonsWithEvent(blockingMessages(n.Conditions), events)
+		s.Events = trimEvents(events)
 		d.Suspects = append(d.Suspects, s)
 	}
 
 	root := suspects[0]
 	d.Summary = fmt.Sprintf("%d blocking, %d pending resource(s); likely root cause: %s %q (%s, depth %d).",
 		blocked, pending, root.Kind, root.Name, root.APIVersion, root.depth)
-	if msgs := blockingMessages(root.Conditions); len(msgs) > 0 {
-		d.Summary += " " + msgs[0]
+
+	// Attribute over the root's full events (not the trimmed s.Events) so the
+	// summary's cause matches the reasons even when the qualifying event fell
+	// outside the surfaced window. attribute prefers a recurring composition
+	// event over a transport-flake condition; otherwise it returns the condition
+	// message, preserving the previous behaviour exactly.
+	msg, fromEvent := attribute(blockingMessages(root.Conditions), rootEvents)
+	if msg != "" {
+		d.Summary += " " + msg
+	}
+	// When a genuine condition led but a hot loop is also recurring, point at it
+	// so the agent never misses the persistent failure behind the symptom.
+	if e, ok := qualifyingEvent(rootEvents); ok && !fromEvent {
+		d.Summary += fmt.Sprintf(" Recurring event: %s (x%d).", e.Reason, e.Count)
 	}
 	return d
 }

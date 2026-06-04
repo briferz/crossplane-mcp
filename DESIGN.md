@@ -177,6 +177,12 @@ servers and over `trace`. Pseudo-logic:
    failing, not the propagated `Ready:False` at the root.
 5. Return ranked suspects with **untruncated** messages + correlated events +
    (if present) the failing function-pipeline step.
+6. **Attribute the cause:** prefer the failing condition message, but when that
+   condition is a transient transport flake (`unexpected EOF`, `connection
+   reset`, `rpc … Unavailable`, …) and a Crossplane composition/validation
+   **event** recurs with a high count, surface that recurring event as the root
+   cause instead — and always surface the dominant recurring event. Avoids
+   chasing a phantom network error over the persistent bug behind it (#24).
 
 ---
 
@@ -224,8 +230,11 @@ richer ranking).
   socket (richer but unstable). Lean stable for v1.
 - Multi-cluster UX: single context per server process vs. per-call `context`
   arg.
-- Exact root-cause ranking heuristics for `diagnose` (depth, condition type,
-  event recency, reason codes) — needs iteration against real broken clusters.
+- Root-cause ranking heuristics for `diagnose`: deepest-blocking-first plus
+  event-recurrence weighting (a transient-flake condition yields to a high-count
+  recurring composition event) landed from real-cluster feedback (#24); further
+  tuning (reason codes, condition-type weighting, function-pipeline shapes) keeps
+  iterating against real broken clusters.
 
 ---
 
