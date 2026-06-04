@@ -84,8 +84,8 @@ See README "Releasing".
 
 - v0.1.0 is released; install via `brew install --cask briferz/tap/crossplane-mcp`
   or `ghcr.io/briferz/crossplane-mcp`.
-- The `diagnose` root-cause ranking sorts **blocking resources before pending
-  ones, then deepest-first**, and is not yet validated against a real cluster —
-  the `/e2e-fixture` skill spins up a deterministic stuck-resource cluster for
-  that.
+- The `diagnose` root-cause ranking sorts **blocking before pending, then
+  deepest-first**, and attributes the cause to a **recurring high-count
+  composition event over a transient transport-flake condition** (issue #24 P1).
+  Validated against a real cluster via the `/e2e-fixture` skill and live EKS use.
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.

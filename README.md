@@ -111,6 +111,10 @@ The assistant calls `diagnose` with `{kind: "App", name: "app-xyz", namespace:
 with `AccessDenied: invalid credentials`) instead of the unhelpful top-level
 "waiting for composite resource to become Ready".
 
+When the latest condition is a transient transport error (`unexpected EOF`,
+`connection reset`, …) but a composition error keeps recurring, `diagnose`
+surfaces that persistent root cause rather than the flake.
+
 ## Flags
 
 | Flag | Default | Description |
