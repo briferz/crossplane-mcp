@@ -51,7 +51,10 @@ These keep the project focused. They are deliberate, not "not yet."
 
 ### Phase 1 — Diagnostics MVP ✅ (shipped, v0.1.x)
 - `diagnose` — walk the tree, rank the deepest blocking resource as the likely
-  root cause, with full condition messages + recent events.
+  root cause, with full condition messages + recent events. Real-world feedback
+  (#24) added event-weighted ranking (a recurring composition event beats a
+  transient transport-flake condition) and `provider-terraform`/OpenTofu
+  error-blob decoding (the `base64 -d | gunzip` hint → `decodedErrors`).
 - `get_resource_tree`, `get_resource`, `list_contexts`.
 - Handles Crossplane v2 (namespaced XRs) and v1/LegacyCluster.
 - Read-only, token-light output; validated against a live v2 cluster.

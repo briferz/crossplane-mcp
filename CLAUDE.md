@@ -88,4 +88,10 @@ See README "Releasing".
   deepest-first**, and attributes the cause to a **recurring high-count
   composition event over a transient transport-flake condition** (issue #24 P1).
   Validated against a real cluster via the `/e2e-fixture` skill and live EKS use.
+- `diagnose` also **decodes provider-terraform/OpenTofu base64+gzip error blobs**
+  (the `echo … | base64 -d | gunzip` hint) into `Suspect.DecodedErrors`, trimmed
+  to the actionable `Error:`/`Summary:` lines (issue #24 #3/#5). Pure logic in
+  `internal/xp/tofu.go`; **additive** — the verbatim condition stays in `reasons`.
+  Decoded text is surfaced as-is (not scrubbed); `sensitive`-marking is the
+  TF/OpenTofu config's responsibility, not ours.
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.

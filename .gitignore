@@ -28,6 +28,9 @@ go.work.sum
 # env file
 .env
 
+# Claude Code agent worktrees (harness artifacts; tracked .claude config stays)
+.claude/worktrees/
+
 # Editor/IDE
 # .idea/
 # .vscode/
