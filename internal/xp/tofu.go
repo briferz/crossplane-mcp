@@ -172,6 +172,7 @@ func decodeBlob(b64 string) (decoded string, ok bool) {
 	if err != nil {
 		return "", false
 	}
+	defer func() { _ = gr.Close() }() // source is in-memory, but close the reader idiomatically
 	// Single member only: provider-terraform emits one gzip member, so stop at
 	// its end and ignore any trailing junk rather than trying to read a second
 	// member (which would error AFTER the real content was already decoded).
