@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/briferz/crossplane-mcp/compare/v0.2.0...v0.2.1) (2026-06-04)
+
+
+### Bug Fixes
+
+* bump Go to 1.26.4 to patch stdlib vulnerabilities (GO-2026-5037/5038/5039) ([#26](https://github.com/briferz/crossplane-mcp/issues/26)) ([4ab8de0](https://github.com/briferz/crossplane-mcp/commit/4ab8de0043a829d07b1e3ad659de75483d6603f5))
+
 ## [0.2.0](https://github.com/briferz/crossplane-mcp/compare/v0.1.1...v0.2.0) (2026-05-29)
 
 
