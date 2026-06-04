@@ -164,7 +164,7 @@ func TestScrubSecrets(t *testing.T) {
 		"jwt":      "id_token=" + jwt,
 		"jwt-min":  "token " + jwtMin,
 		"jwt-none": "unsigned " + jwtNone,
-		"bearer":   "Authorization: Bearer abc.def-123_ZZ",
+		"bearer":   "Authorization: Bearer abcdef0123456789ghij", // ≥16-char token
 	}
 	for name, in := range masked {
 		if got := scrubSecrets(in); !contains(got, redactedMarker) {
@@ -177,12 +177,12 @@ func TestScrubSecrets(t *testing.T) {
 	if contains(scrubSecrets(pgp), "lQVYBGZ0dummy") {
 		t.Error("PGP key body leaked through scrub")
 	}
-	if got := scrubSecrets("Authorization: Bearer abc.def-123"); !contains(got, "Bearer "+redactedMarker) {
+	if got := scrubSecrets("Authorization: Bearer abcdef0123456789ghij"); !contains(got, "Bearer "+redactedMarker) {
 		t.Errorf("bearer scheme word should survive, token masked: %q", got)
 	}
-	// A structured-header VALUE (no "Authorization:" prefix in the string) must
-	// still be masked — the token has a symbol/digit, so it is caught.
-	if got := scrubSecrets("Bearer abc.def-123"); !contains(got, redactedMarker) {
+	// A structured-header VALUE (no "Authorization:" prefix in the string) with a
+	// realistic-length token must still be masked.
+	if got := scrubSecrets("Bearer abcdef0123456789ghij"); !contains(got, redactedMarker) {
 		t.Errorf("bare structured-header bearer value should be masked: %q", got)
 	}
 	// The scheme→token separator is spaces/tabs only: a dangling "Bearer" at a
@@ -199,8 +199,10 @@ func TestScrubSecrets(t *testing.T) {
 		"Error: failed to create bucket: AccessDenied",
 		"account 123456789012 is denied",
 		"on main.tf line 42, in resource \"aws_s3_bucket\" \"this\"",
-		"Bearer token is expired",                    // no "Authorization:" prefix → not a token
-		"missing Bearer token in the request header", // prose, not a credential
+		"Bearer token is expired",                             // short word → not a token
+		"missing Bearer token in the request header",          // prose, not a credential
+		"Bearer 2.0 is the supported scheme",                  // version string, <16 chars → not a token
+		"WWW-Authenticate: Bearer realm=\"api\", error=\"x\"", // RFC 6750 challenge params must stay intact
 		"eyJshort.x.y",        // header <8 chars after eyJ → not a JWT
 		"com.example.service", // dotted, but no eyJ prefix
 		"-----BEGIN PGP PUBLIC KEY BLOCK-----\nabc\n-----END PGP PUBLIC KEY BLOCK-----", // PUBLIC, not PRIVATE
@@ -220,7 +222,7 @@ func TestRecorderContentScrub(t *testing.T) {
 		"suspects": []any{
 			map[string]any{
 				"decodedErrors": []any{"Error: bad creds AKIAIOSFODNN7EXAMPLE on main.tf line 3"},
-				"reasons":       []any{"Synced: ReconcileError — Authorization: Bearer tok.en-123"},
+				"reasons":       []any{"Synced: ReconcileError — Authorization: Bearer tok.en-1234567890ab"},
 			},
 		},
 	}
@@ -233,7 +235,7 @@ func TestRecorderContentScrub(t *testing.T) {
 	if !contains(s, "on main.tf line 3") {
 		t.Errorf("surrounding actionable text over-redacted: %s", s)
 	}
-	if contains(s, "tok.en-123") {
+	if contains(s, "tok.en-1234567890ab") {
 		t.Errorf("bearer token in reasons not scrubbed: %s", s)
 	}
 
@@ -248,11 +250,11 @@ func TestRecorderContentScrub(t *testing.T) {
 // error string is scrubbed (the error field bypasses prepare/redactValue, so
 // record() scrubs it directly), and that --log-redact=false keeps it verbatim.
 func TestRecorderErrorScrub(t *testing.T) {
-	secretErr := errors.New("auth failed: Authorization: Bearer sekrit.tok-1 using AKIAIOSFODNN7EXAMPLE")
+	secretErr := errors.New("auth failed: Authorization: Bearer sekrit.tok-1234567890 using AKIAIOSFODNN7EXAMPLE")
 	var on bytes.Buffer
 	(&Recorder{w: &on, redact: true}).record("get_resource", 0, map[string]any{"kind": "X"}, nil, secretErr)
 	s := on.String()
-	if contains(s, "AKIAIOSFODNN7EXAMPLE") || contains(s, "sekrit.tok-1") {
+	if contains(s, "AKIAIOSFODNN7EXAMPLE") || contains(s, "sekrit.tok-1234567890") {
 		t.Errorf("secret in error string not scrubbed: %s", s)
 	}
 	if !contains(s, "auth failed") {

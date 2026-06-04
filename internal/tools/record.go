@@ -175,14 +175,15 @@ var secretPatterns = []*regexp.Regexp{
 }
 
 // bearerRe masks the token after a "Bearer" scheme, keeping the scheme word so
-// the line still reads sensibly. The token must contain a digit or symbol, so
-// the word "Bearer" in ordinary prose ("Bearer token is expired") is not eaten;
-// the scheme→token separator is spaces/tabs only ([ \t], not \s) so a dangling
-// "Bearer" at end of a line cannot consume the next line's first token. Matches
-// both inline "Authorization: Bearer <tok>" and a structured header value whose
-// string is just "Bearer <tok>" (real tokens are base64/JWT → always have a
-// digit or symbol).
-var bearerRe = regexp.MustCompile(`(?i)(bearer[ \t]+)[\w.~+/=-]*[\d.~+/=][\w.~+/=-]*`)
+// the line still reads sensibly. The token must be ≥16 chars: real bearer tokens
+// (JWT, ya29.…, ghp_…, sk-…) are always well over that, while short words and
+// RFC 6750 challenge params (Bearer 2.0, realm="…", error="…") are not — so prose
+// and auth-challenge headers are left intact rather than over-masked/corrupted.
+// The scheme→token separator is spaces/tabs only ([ \t], not \s) so a dangling
+// "Bearer" at a line end cannot consume the next line's first token. Matches both
+// inline "Authorization: Bearer <tok>" and a structured header value whose string
+// is just "Bearer <tok>".
+var bearerRe = regexp.MustCompile(`(?i)(bearer[ \t]+)[\w.~+/=-]{16,}`)
 
 // scrubSecrets replaces high-precision secret patterns in a string with the
 // redaction marker. Applied to every logged string value when redaction is on.
