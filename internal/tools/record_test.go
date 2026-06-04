@@ -180,6 +180,16 @@ func TestScrubSecrets(t *testing.T) {
 	if got := scrubSecrets("Authorization: Bearer abc.def-123"); !contains(got, "Bearer "+redactedMarker) {
 		t.Errorf("bearer scheme word should survive, token masked: %q", got)
 	}
+	// A structured-header VALUE (no "Authorization:" prefix in the string) must
+	// still be masked — the token has a symbol/digit, so it is caught.
+	if got := scrubSecrets("Bearer abc.def-123"); !contains(got, redactedMarker) {
+		t.Errorf("bare structured-header bearer value should be masked: %q", got)
+	}
+	// The scheme→token separator is spaces/tabs only: a dangling "Bearer" at a
+	// line end must NOT consume the next line's first token.
+	if got := scrubSecrets("Authorization: Bearer\nGET-123 /v1/x"); !contains(got, "GET-123") {
+		t.Errorf("bearer match must not span a newline onto the next line: %q", got)
+	}
 
 	// False-positive guards: these are NOT secrets and must pass through verbatim.
 	keep := []string{

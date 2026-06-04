@@ -174,11 +174,15 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`),
 }
 
-// bearerRe masks the token after an "Authorization: Bearer" header, keeping the
-// scheme so the line still reads sensibly. Anchored on "authorization:" so the
-// word "Bearer" in ordinary prose ("Bearer token is expired") is not treated as
-// a token prefix; a bare "Bearer <jwt>" is still caught by the JWT pattern.
-var bearerRe = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[\w.~+/=-]+`)
+// bearerRe masks the token after a "Bearer" scheme, keeping the scheme word so
+// the line still reads sensibly. The token must contain a digit or symbol, so
+// the word "Bearer" in ordinary prose ("Bearer token is expired") is not eaten;
+// the scheme→token separator is spaces/tabs only ([ \t], not \s) so a dangling
+// "Bearer" at end of a line cannot consume the next line's first token. Matches
+// both inline "Authorization: Bearer <tok>" and a structured header value whose
+// string is just "Bearer <tok>" (real tokens are base64/JWT → always have a
+// digit or symbol).
+var bearerRe = regexp.MustCompile(`(?i)(bearer[ \t]+)[\w.~+/=-]*[\d.~+/=][\w.~+/=-]*`)
 
 // scrubSecrets replaces high-precision secret patterns in a string with the
 // redaction marker. Applied to every logged string value when redaction is on.
