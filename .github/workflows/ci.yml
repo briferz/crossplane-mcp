@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly (Mon 06:00 UTC): re-run CI — chiefly govulncheck — so a stdlib CVE
+    # disclosed while the repo is quiet is caught, not just on the next push/PR.
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
