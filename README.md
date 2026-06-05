@@ -150,20 +150,27 @@ The file is created `0600`. Logging goes only to the file/stderr — never stdou
 which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
 may interleave with other process output; use a file for clean JSONL.)
 
-By default, scalar values under sensitive keys (`password`, `token`, `secret`,
-`credential`, `apikey`, `accesskey`, `privatekey`, `connection`, `dsn`, …) are
-**masked** as `[redacted]` — so inline credentials in a resource `spec` aren't
-written verbatim. Reference structures (e.g. a `secretRef`'s name) are kept.
-Disable masking with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
+By default, two masks run before each record is written:
 
-> **Sensitivity:** masking is **heuristic and key-based** — it can miss a secret
-> stored under an unexpected key, and it does not scrub provider *error* text
-> (which may contain identifiers like account IDs or ARNs). Decoded
-> `provider-terraform`/OpenTofu errors (`decodedErrors`) are surfaced and logged
-> verbatim for the same reason and are likewise not scrubbed — values that must
-> stay hidden should be marked `sensitive` in the Terraform/OpenTofu config. The
-> server never reads Kubernetes Secret objects. Treat the log as potentially
-> sensitive and **review it before sharing off a machine that touches production.**
+- **key-based** — scalar values under sensitive keys (`password`, `token`,
+  `secret`, `credential`, `apikey`, `accesskey`, `privatekey`, `connection`,
+  `dsn`, …) become `[redacted]`, so inline credentials in a resource `spec`
+  aren't written verbatim (reference structures like a `secretRef`'s name are kept);
+- **content-based** — every logged string is scrubbed for a few high-precision
+  secret shapes (PEM private keys, AWS access-key IDs, JWTs, `Authorization:
+  Bearer` tokens), which catches credential material the key-based mask misses —
+  including in provider *error* text and the decoded OpenTofu blob (`decodedErrors`).
+
+Disable both with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
+
+> **Sensitivity:** both masks are **best-effort, not a guarantee.** The content
+> scrub is deliberately high-precision — it won't catch an arbitrary or
+> unusually-shaped secret, and it intentionally does **not** mask identifiers like
+> account IDs or ARNs (often the actionable detail). Redaction applies only to the
+> log, never to the live tool response; values that must stay hidden should be
+> marked `sensitive` in the Terraform/OpenTofu config. The server never reads
+> Kubernetes Secret objects. Treat the log as potentially sensitive and **review
+> it before sharing off a machine that touches production.**
 
 ## Development
 
