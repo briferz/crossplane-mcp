@@ -484,6 +484,48 @@ func TestDiagnoseTerminatingReadyDoesNotDisplaceDeeperFailure(t *testing.T) {
 	}
 }
 
+// TestDiagnoseDeletingBlockedLeafRanksFirst covers the common wedged-finalizer
+// shape (deletionTimestamp + Ready=False/Deleting): it is counted terminating
+// yet ranks tier 0 (its State is Blocked) so it stays the likely root cause.
+func TestDiagnoseDeletingBlockedLeafRanksFirst(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	leaf := node(2, "Workspace", "ws",
+		[]Condition{cond("Ready", "False", "Deleting", "destroy failed: HostedZoneNotEmpty")})
+	leaf.deletionTime = "2026-01-15T00:00:00Z"
+	mid := node(1, "XThing", "x", []Condition{cond("Ready", "Unknown", "", "")}, leaf)
+	root := node(0, "App", "a", []Condition{cond("Ready", "Unknown", "", "")}, mid)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
+
+	if d.Suspects[0].Kind != "Workspace" {
+		t.Fatalf("deleting+blocked leaf should rank first (tier 0), got %s", d.Suspects[0].Kind)
+	}
+	if d.Suspects[0].Lifecycle != "Terminating (stuck 140d)" {
+		t.Errorf("expected Terminating label, got %q", d.Suspects[0].Lifecycle)
+	}
+	if !strings.Contains(d.Summary, "0 blocking, 2 pending, 1 terminating") {
+		t.Errorf("expected '0 blocking, 2 pending, 1 terminating', got: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseTerminatingCountWording pins the headline wording: a non-deleting
+// tree keeps the pre-PR template with no terminating clause.
+func TestDiagnoseTerminatingCountWording(t *testing.T) {
+	leaf := node(1, "Bucket", "b", []Condition{cond("Synced", "False", "Err", "boom")})
+	root := node(0, "App", "a", []Condition{cond("Ready", "Unknown", "", "")}, leaf)
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 2}, false)
+
+	if strings.Contains(d.Summary, "terminating") {
+		t.Errorf("non-deleting tree must not mention terminating: %s", d.Summary)
+	}
+	if !strings.HasPrefix(d.Summary, "1 blocking, 1 pending resource(s); likely root cause:") {
+		t.Errorf("non-deleting summary should keep the pre-PR template: %s", d.Summary)
+	}
+}
+
 func TestFlatten(t *testing.T) {
 	root := node(0, "App", "app",
 		[]Condition{cond("Ready", "True", "", "")},
