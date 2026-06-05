@@ -192,6 +192,12 @@ servers and over `trace`. Pseudo-logic:
    and **additive** — the verbatim condition message (hint included) is left
    untouched in `reasons`. Decoded text is not scrubbed; `sensitive`-marking is
    the TF/OpenTofu config's job.
+8. **Label the lifecycle:** surface each suspect's `deletionTimestamp` (raw) and
+   a derived `lifecycle` label that distinguishes a wedged teardown
+   (`Terminating (stuck 140d)`) from a resource failing to come up
+   (`Creating (blocked, 5d)`) — the age (how long stuck) is the signal (#24). The
+   age clock is injected (`nowFn`) so the pure logic stays unit-testable; a
+   resource being deleted is always labelled Terminating regardless of its age.
 
 ---
 

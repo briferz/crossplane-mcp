@@ -53,8 +53,10 @@ These keep the project focused. They are deliberate, not "not yet."
 - `diagnose` — walk the tree, rank the deepest blocking resource as the likely
   root cause, with full condition messages + recent events. Real-world feedback
   (#24) added event-weighted ranking (a recurring composition event beats a
-  transient transport-flake condition) and `provider-terraform`/OpenTofu
-  error-blob decoding (the `base64 -d | gunzip` hint → `decodedErrors`).
+  transient transport-flake condition), `provider-terraform`/OpenTofu
+  error-blob decoding (the `base64 -d | gunzip` hint → `decodedErrors`), and a
+  `lifecycle` label separating a wedged teardown (`Terminating (stuck Nd)`) from
+  a blocked create (`Creating (blocked, Nd)`).
 - `get_resource_tree`, `get_resource`, `list_contexts`.
 - Handles Crossplane v2 (namespaced XRs) and v1/LegacyCluster.
 - Read-only, token-light output; validated against a live v2 cluster.

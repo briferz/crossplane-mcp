@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -402,6 +403,36 @@ func TestDiagnoseNoBlobDecodedErrorsNil(t *testing.T) {
 	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
 	if d.Suspects[0].DecodedErrors != nil {
 		t.Errorf("expected nil DecodedErrors without a blob, got %v", d.Suspects[0].DecodedErrors)
+	}
+}
+
+// TestDiagnoseLifecycle confirms suspects carry the deletionTimestamp and a
+// derived lifecycle label distinguishing a wedged teardown from a blocked create.
+func TestDiagnoseLifecycle(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	// A leaf stuck Terminating for months.
+	leaf := node(0, "Workspace", "ws", []Condition{cond("Ready", "False", "Deleting", "finalizer running")})
+	leaf.deletionTime = "2026-01-15T00:00:00Z"
+	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
+	if got := d.Suspects[0].DeletionTimestamp; got != "2026-01-15T00:00:00Z" {
+		t.Errorf("deletionTimestamp not surfaced: %q", got)
+	}
+	if got := d.Suspects[0].Lifecycle; got != "Terminating (stuck 140d)" {
+		t.Errorf("expected stuck-terminating label, got %q", got)
+	}
+
+	// A resource failing to come up (no deletionTimestamp).
+	mr := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "ReconcileError", "AccessDenied")})
+	mr.creationTime = "2026-05-30T00:00:00Z"
+	d = Diagnose(context.Background(), &stubEvents{}, mr, Stats{Nodes: 1}, false)
+	if d.Suspects[0].DeletionTimestamp != "" {
+		t.Errorf("non-deleting resource must not surface a deletionTimestamp: %q", d.Suspects[0].DeletionTimestamp)
+	}
+	if got := d.Suspects[0].Lifecycle; got != "Creating (blocked, 5d)" {
+		t.Errorf("expected blocked-creating label, got %q", got)
 	}
 }
 

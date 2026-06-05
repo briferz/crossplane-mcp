@@ -29,13 +29,20 @@ type EventFetcher interface {
 
 // Suspect is a resource flagged as a likely cause of a problem.
 type Suspect struct {
-	APIVersion string   `json:"apiVersion"`
-	Kind       string   `json:"kind"`
-	Name       string   `json:"name"`
-	Namespace  string   `json:"namespace,omitempty"`
-	Depth      int      `json:"depth"`
-	Health     Health   `json:"health"`
-	Reasons    []string `json:"reasons,omitempty"`
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
+	Depth      int    `json:"depth"`
+	Health     Health `json:"health"`
+	// DeletionTimestamp is set (RFC3339) when the resource is being deleted, and
+	// Lifecycle is a derived label — "Terminating (stuck 140d)" for a wedged
+	// teardown vs "Creating (blocked, 5d)" for one failing to come up — so an
+	// agent can tell "unblock the finalizer" from "fix the create" and see how
+	// long it has been stuck.
+	DeletionTimestamp string   `json:"deletionTimestamp,omitempty"`
+	Lifecycle         string   `json:"lifecycle,omitempty"`
+	Reasons           []string `json:"reasons,omitempty"`
 	// DecodedErrors carries the actionable provider error decoded from a
 	// provider-terraform/OpenTofu "… | base64 -d | gunzip" hint embedded in a
 	// condition (or recurring event) message: the base64+gzip blob is decoded
@@ -116,12 +123,14 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			break
 		}
 		s := Suspect{
-			APIVersion: n.APIVersion,
-			Kind:       n.Kind,
-			Name:       n.Name,
-			Namespace:  n.Namespace,
-			Depth:      n.depth,
-			Health:     n.Health,
+			APIVersion:        n.APIVersion,
+			Kind:              n.Kind,
+			Name:              n.Name,
+			Namespace:         n.Namespace,
+			Depth:             n.depth,
+			Health:            n.Health,
+			DeletionTimestamp: n.deletionTime,
+			Lifecycle:         lifecycleLabel(n, nowFn()),
 		}
 		var events []k8s.Event
 		if ev != nil {

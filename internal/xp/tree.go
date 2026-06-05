@@ -3,7 +3,9 @@ package xp
 import (
 	"context"
 	"strings"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
@@ -27,9 +29,13 @@ type Node struct {
 	Children   []*Node     `json:"children,omitempty"`
 	Error      string      `json:"error,omitempty"`
 
-	// Internal, not serialised.
-	uid   string
-	depth int
+	// Internal, not serialised. deletionTime/creationTime are the object's
+	// metadata timestamps (RFC3339, "" if absent), used to derive the lifecycle
+	// label and surfaced raw on suspects.
+	uid          string
+	depth        int
+	deletionTime string
+	creationTime string
 }
 
 // Stats reports traversal coverage.
@@ -51,7 +57,10 @@ type FlatNode struct {
 	Namespace  string `json:"namespace,omitempty"`
 	State      string `json:"state"`
 	Health     Health `json:"health"`
-	Error      string `json:"error,omitempty"`
+	// DeletionTimestamp is set (RFC3339) when the resource is being deleted —
+	// surfacing a terminating node directly in the tree.
+	DeletionTimestamp string `json:"deletionTimestamp,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // Flatten projects the tree into a depth-first slice of FlatNodes.
@@ -61,15 +70,16 @@ func (n *Node) Flatten() []FlatNode {
 	rec = func(node *Node, parent int) {
 		idx := len(out)
 		out = append(out, FlatNode{
-			Depth:      node.depth,
-			Parent:     parent,
-			APIVersion: node.APIVersion,
-			Kind:       node.Kind,
-			Name:       node.Name,
-			Namespace:  node.Namespace,
-			State:      node.State,
-			Health:     node.Health,
-			Error:      node.Error,
+			Depth:             node.depth,
+			Parent:            parent,
+			APIVersion:        node.APIVersion,
+			Kind:              node.Kind,
+			Name:              node.Name,
+			Namespace:         node.Namespace,
+			State:             node.State,
+			Health:            node.Health,
+			DeletionTimestamp: node.deletionTime,
+			Error:             node.Error,
 		})
 		for _, c := range node.Children {
 			rec(c, idx)
@@ -120,19 +130,38 @@ func groupOf(apiVersion string) string {
 	return ""
 }
 
+// deletionTime returns the object's metadata.deletionTimestamp as RFC3339, or ""
+// when the resource is not being deleted.
+func deletionTime(obj *unstructured.Unstructured) string {
+	if dt := obj.GetDeletionTimestamp(); dt != nil {
+		return metaTimeString(*dt)
+	}
+	return ""
+}
+
+// metaTimeString formats a metav1.Time as RFC3339 (UTC), or "" when zero/absent.
+func metaTimeString(t metav1.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, depth int, visited map[string]bool, st *Stats) *Node {
 	conds := Conditions(obj)
 	health, state := Classify(conds)
 	n := &Node{
-		APIVersion: obj.GetAPIVersion(),
-		Kind:       obj.GetKind(),
-		Name:       obj.GetName(),
-		Namespace:  obj.GetNamespace(),
-		State:      state,
-		Health:     health,
-		Conditions: conds,
-		uid:        string(obj.GetUID()),
-		depth:      depth,
+		APIVersion:   obj.GetAPIVersion(),
+		Kind:         obj.GetKind(),
+		Name:         obj.GetName(),
+		Namespace:    obj.GetNamespace(),
+		State:        state,
+		Health:       health,
+		Conditions:   conds,
+		uid:          string(obj.GetUID()),
+		depth:        depth,
+		deletionTime: deletionTime(obj),
+		creationTime: metaTimeString(obj.GetCreationTimestamp()),
 	}
 	st.Nodes++
 
