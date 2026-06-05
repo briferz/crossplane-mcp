@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/briferz/crossplane-mcp/compare/v0.3.0...v0.4.0) (2026-06-05)
+
+
+### Features
+
+* create the --log-file parent directory ([#34](https://github.com/briferz/crossplane-mcp/issues/34)) ([e55d6f2](https://github.com/briferz/crossplane-mcp/commit/e55d6f2663fae37b8b25c8eea4cb1ec4a62c9744))
+* decode provider-terraform/OpenTofu base64+gzip error blobs in diagnose output ([#30](https://github.com/briferz/crossplane-mcp/issues/30)) ([2f29d93](https://github.com/briferz/crossplane-mcp/commit/2f29d9308c6c4a4473c77a244a850b0f0d8d7ba1))
+* label suspect lifecycle (Terminating-stuck vs Creating-blocked) ([#33](https://github.com/briferz/crossplane-mcp/issues/33)) ([48ec24e](https://github.com/briferz/crossplane-mcp/commit/48ec24e4406d3f8766c67d4466b935351b4187ce))
+* scrub high-precision secrets from --log-file records ([#32](https://github.com/briferz/crossplane-mcp/issues/32)) ([04ab335](https://github.com/briferz/crossplane-mcp/commit/04ab335a8adaccb67cc83214df2dc19437cc30f8))
+
 ## [0.3.0](https://github.com/briferz/crossplane-mcp/compare/v0.2.1...v0.3.0) (2026-06-04)
 
 
