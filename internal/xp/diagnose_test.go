@@ -455,6 +455,33 @@ func TestDiagnoseDeletingReadySurfaced(t *testing.T) {
 	if len(d.Suspects) != 1 || d.Suspects[0].Lifecycle != "Terminating (stuck 140d)" {
 		t.Fatalf("expected the deleting Ready resource surfaced as Terminating, got %+v", d.Suspects)
 	}
+	// The headline counts it as terminating, not pending — matching its label.
+	if !strings.Contains(d.Summary, "1 terminating") || strings.Contains(d.Summary, "1 pending") {
+		t.Errorf("summary should count the deleting resource as terminating: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseTerminatingReadyDoesNotDisplaceDeeperFailure guards that a node
+// surfaced only because it is being deleted (still Ready, no failing condition)
+// never outranks a genuine deeper failure as the likely root cause.
+func TestDiagnoseTerminatingReadyDoesNotDisplaceDeeperFailure(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	child := node(1, "XThing", "x", []Condition{cond("Ready", "Unknown", "Provisioning", "still reconciling")})
+	root := node(0, "App", "a",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")}, child)
+	root.deletionTime = "2026-01-15T00:00:00Z"
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 2}, false)
+
+	if d.Suspects[0].Kind != "XThing" {
+		t.Fatalf("a deleting-Ready root must not displace the deeper genuine failure; got root cause %s", d.Suspects[0].Kind)
+	}
+	if !strings.Contains(d.Summary, `XThing`) || !strings.Contains(d.Summary, "1 terminating") {
+		t.Errorf("summary should name the real failing child and count the terminating root: %s", d.Summary)
+	}
 }
 
 func TestFlatten(t *testing.T) {

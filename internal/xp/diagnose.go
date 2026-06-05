@@ -86,12 +86,15 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		}
 	})
 
-	// Rank: Blocked (a failing condition) before Pending, then deepest first —
-	// a leaf managed resource failing is a more actionable root cause than the
-	// composite that merely propagates the problem upward.
+	// Rank by how actionable a suspect is, then deepest first — a leaf managed
+	// resource failing is a more actionable root cause than the composite that
+	// merely propagates the problem upward. A node surfaced only because it is
+	// being deleted while its conditions still report Ready has no failing
+	// condition to explain, so it ranks below any genuine Blocked/Pending failure
+	// and never displaces the real root cause.
 	sort.SliceStable(suspects, func(i, j int) bool {
-		if suspects[i].State != suspects[j].State {
-			return suspects[i].State == StateBlocked
+		if ti, tj := rankTier(suspects[i]), rankTier(suspects[j]); ti != tj {
+			return ti < tj
 		}
 		return suspects[i].depth > suspects[j].depth
 	})
@@ -106,11 +109,16 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		return d
 	}
 
-	var blocked, pending int
+	// Count by lifecycle so the headline matches each suspect's Lifecycle label: a
+	// resource being deleted is "terminating", not a pending create.
+	var blocked, pending, terminating int
 	for _, n := range suspects {
-		if n.State == StateBlocked {
+		switch {
+		case n.deletionTime != "":
+			terminating++
+		case n.State == StateBlocked:
 			blocked++
-		} else {
+		default:
 			pending++
 		}
 	}
@@ -160,8 +168,12 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	}
 
 	root := suspects[0]
-	d.Summary = fmt.Sprintf("%d blocking, %d pending resource(s); likely root cause: %s %q (%s, depth %d).",
-		blocked, pending, root.Kind, root.Name, root.APIVersion, root.depth)
+	counts := fmt.Sprintf("%d blocking, %d pending", blocked, pending)
+	if terminating > 0 {
+		counts += fmt.Sprintf(", %d terminating", terminating)
+	}
+	d.Summary = fmt.Sprintf("%s resource(s); likely root cause: %s %q (%s, depth %d).",
+		counts, root.Kind, root.Name, root.APIVersion, root.depth)
 
 	// Attribute over the root's full events (not the trimmed s.Events) so the
 	// summary's cause matches the reasons even when the qualifying event fell
@@ -178,6 +190,22 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		d.Summary += fmt.Sprintf(" Recurring event: %s (x%d).", e.Reason, e.Count)
 	}
 	return d
+}
+
+// rankTier orders a suspect by how actionable it is for root-cause ranking: a
+// failing condition (Blocked) first, then Pending, then a node surfaced only
+// because it is being deleted while still reporting Ready (StateReady) — that
+// last one has no failing condition to explain and must not displace a genuine
+// failure as the likely root cause.
+func rankTier(n *Node) int {
+	switch n.State {
+	case StateBlocked:
+		return 0
+	case StatePending:
+		return 1
+	default: // StateReady — only collected because it is being deleted
+		return 2
+	}
 }
 
 func walk(n *Node, fn func(*Node)) {
