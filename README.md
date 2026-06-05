@@ -121,6 +121,12 @@ surfaces the actionable `Error: … on main.tf line NN` in a `decodedErrors`
 field — boilerplate trimmed and token-light — so the real cause is in front of
 the agent without shelling out.
 
+Each suspect also carries a `lifecycle` label that separates a **wedged teardown**
+from a resource **failing to come up**: a resource being deleted shows
+`Terminating (stuck 140d)` (with its `deletionTimestamp` and how long it has
+lingered), while one still provisioning shows `Creating (blocked, 5d)` — so an
+agent routes to "unblock the finalizer" vs "fix the create" immediately.
+
 ## Flags
 
 | Flag | Default | Description |

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -402,6 +403,126 @@ func TestDiagnoseNoBlobDecodedErrorsNil(t *testing.T) {
 	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
 	if d.Suspects[0].DecodedErrors != nil {
 		t.Errorf("expected nil DecodedErrors without a blob, got %v", d.Suspects[0].DecodedErrors)
+	}
+}
+
+// TestDiagnoseLifecycle confirms suspects carry the deletionTimestamp and a
+// derived lifecycle label distinguishing a wedged teardown from a blocked create.
+func TestDiagnoseLifecycle(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	// A leaf stuck Terminating for months.
+	leaf := node(0, "Workspace", "ws", []Condition{cond("Ready", "False", "Deleting", "finalizer running")})
+	leaf.deletionTime = "2026-01-15T00:00:00Z"
+	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
+	if got := d.Suspects[0].DeletionTimestamp; got != "2026-01-15T00:00:00Z" {
+		t.Errorf("deletionTimestamp not surfaced: %q", got)
+	}
+	if got := d.Suspects[0].Lifecycle; got != "Terminating (stuck 140d)" {
+		t.Errorf("expected stuck-terminating label, got %q", got)
+	}
+
+	// A resource failing to come up (no deletionTimestamp).
+	mr := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "ReconcileError", "AccessDenied")})
+	mr.creationTime = "2026-05-30T00:00:00Z"
+	d = Diagnose(context.Background(), &stubEvents{}, mr, Stats{Nodes: 1}, false)
+	if d.Suspects[0].DeletionTimestamp != "" {
+		t.Errorf("non-deleting resource must not surface a deletionTimestamp: %q", d.Suspects[0].DeletionTimestamp)
+	}
+	if got := d.Suspects[0].Lifecycle; got != "Creating (blocked, 5d)" {
+		t.Errorf("expected blocked-creating label, got %q", got)
+	}
+}
+
+// TestDiagnoseDeletingReadySurfaced confirms a resource being deleted is
+// surfaced (and not reported healthy) even when its conditions still say Ready —
+// a finalizer can wedge a teardown while the Ready condition lags.
+func TestDiagnoseDeletingReadySurfaced(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	ready := node(0, "Workspace", "ws",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	ready.deletionTime = "2026-01-15T00:00:00Z"
+	d := Diagnose(context.Background(), &stubEvents{}, ready, Stats{Nodes: 1}, false)
+
+	if d.Healthy {
+		t.Fatal("a resource being deleted must not be reported healthy")
+	}
+	if len(d.Suspects) != 1 || d.Suspects[0].Lifecycle != "Terminating (stuck 140d)" {
+		t.Fatalf("expected the deleting Ready resource surfaced as Terminating, got %+v", d.Suspects)
+	}
+	// The headline counts it as terminating, not pending — matching its label.
+	if !strings.Contains(d.Summary, "1 terminating") || strings.Contains(d.Summary, "1 pending") {
+		t.Errorf("summary should count the deleting resource as terminating: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseTerminatingReadyDoesNotDisplaceDeeperFailure guards that a node
+// surfaced only because it is being deleted (still Ready, no failing condition)
+// never outranks a genuine deeper failure as the likely root cause.
+func TestDiagnoseTerminatingReadyDoesNotDisplaceDeeperFailure(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	child := node(1, "XThing", "x", []Condition{cond("Ready", "Unknown", "Provisioning", "still reconciling")})
+	root := node(0, "App", "a",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")}, child)
+	root.deletionTime = "2026-01-15T00:00:00Z"
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 2}, false)
+
+	if d.Suspects[0].Kind != "XThing" {
+		t.Fatalf("a deleting-Ready root must not displace the deeper genuine failure; got root cause %s", d.Suspects[0].Kind)
+	}
+	if !strings.Contains(d.Summary, `XThing`) || !strings.Contains(d.Summary, "1 terminating") {
+		t.Errorf("summary should name the real failing child and count the terminating root: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseDeletingBlockedLeafRanksFirst covers the common wedged-finalizer
+// shape (deletionTimestamp + Ready=False/Deleting): it is counted terminating
+// yet ranks tier 0 (its State is Blocked) so it stays the likely root cause.
+func TestDiagnoseDeletingBlockedLeafRanksFirst(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	leaf := node(2, "Workspace", "ws",
+		[]Condition{cond("Ready", "False", "Deleting", "destroy failed: HostedZoneNotEmpty")})
+	leaf.deletionTime = "2026-01-15T00:00:00Z"
+	mid := node(1, "XThing", "x", []Condition{cond("Ready", "Unknown", "", "")}, leaf)
+	root := node(0, "App", "a", []Condition{cond("Ready", "Unknown", "", "")}, mid)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 3}, false)
+
+	if d.Suspects[0].Kind != "Workspace" {
+		t.Fatalf("deleting+blocked leaf should rank first (tier 0), got %s", d.Suspects[0].Kind)
+	}
+	if d.Suspects[0].Lifecycle != "Terminating (stuck 140d)" {
+		t.Errorf("expected Terminating label, got %q", d.Suspects[0].Lifecycle)
+	}
+	if !strings.Contains(d.Summary, "0 blocking, 2 pending, 1 terminating") {
+		t.Errorf("expected '0 blocking, 2 pending, 1 terminating', got: %s", d.Summary)
+	}
+}
+
+// TestDiagnoseTerminatingCountWording pins the headline wording: a non-deleting
+// tree keeps the pre-PR template with no terminating clause.
+func TestDiagnoseTerminatingCountWording(t *testing.T) {
+	leaf := node(1, "Bucket", "b", []Condition{cond("Synced", "False", "Err", "boom")})
+	root := node(0, "App", "a", []Condition{cond("Ready", "Unknown", "", "")}, leaf)
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 2}, false)
+
+	if strings.Contains(d.Summary, "terminating") {
+		t.Errorf("non-deleting tree must not mention terminating: %s", d.Summary)
+	}
+	if !strings.HasPrefix(d.Summary, "1 blocking, 1 pending resource(s); likely root cause:") {
+		t.Errorf("non-deleting summary should keep the pre-PR template: %s", d.Summary)
 	}
 }
 

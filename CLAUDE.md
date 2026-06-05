@@ -96,4 +96,10 @@ See README "Releasing".
   `--log-file` recorder applies a best-effort high-precision secret scrub
   (PEM/AWS-key/JWT/Bearer, in `internal/tools/record.go`). `sensitive`-marking
   remains the TF/OpenTofu config's responsibility, not ours.
+- `diagnose` suspects carry a **`deletionTimestamp` + derived `lifecycle` label**
+  distinguishing a wedged teardown (`Terminating (stuck 140d)`) from a blocked
+  create (`Creating (blocked, 5d)`) — issue #24 #4. Pure logic in
+  `internal/xp/lifecycle.go`; the age clock is the injectable `nowFn` so the
+  logic stays unit-testable. Additive (FlatNode also surfaces raw
+  `deletionTimestamp`); ranking unchanged.
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.
