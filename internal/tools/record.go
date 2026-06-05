@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,13 +43,22 @@ type Recorder struct {
 }
 
 // NewRecorder opens dest for appending. dest "-" or "stderr" writes to stderr;
-// anything else is treated as a file path (created if absent, mode 0600). When
-// redact is true, scalar values under sensitive keys are masked before writing.
+// anything else is treated as a file path (created if absent, mode 0600, with
+// any missing parent directories created mode 0700). When redact is true, scalar
+// values under sensitive keys are masked before writing.
 func NewRecorder(dest string, redact bool) (*Recorder, error) {
 	if dest == "-" || dest == "stderr" {
 		return &Recorder{w: os.Stderr, redact: redact}, nil
 	}
 	dest = expandPath(dest)
+	// Create the parent directory so a fresh --log-file path works without a
+	// manual `mkdir -p` first — common when the path is set via an MCP client's
+	// JSON config (no shell to pre-create it).
+	if dir := filepath.Dir(dest); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create log directory %q: %w", dir, err)
+		}
+	}
 	// #nosec G304 -- dest is an operator-provided log path (flag/env), not attacker-controlled.
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // operator-provided log path
 	if err != nil {
