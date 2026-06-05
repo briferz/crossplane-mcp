@@ -36,6 +36,24 @@ func TestExpandPath(t *testing.T) {
 	}
 }
 
+// TestNewRecorderCreatesParentDir confirms a --log-file path under a not-yet-
+// existing directory works (no manual mkdir -p needed).
+func TestNewRecorderCreatesParentDir(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "nested", "deep", "calls.jsonl")
+	r, err := NewRecorder(dest, true)
+	if err != nil {
+		t.Fatalf("NewRecorder should create missing parent dirs: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	if _, err := os.Stat(filepath.Dir(dest)); err != nil {
+		t.Errorf("parent dir not created: %v", err)
+	}
+	r.record("diagnose", 0, map[string]any{"kind": "X"}, map[string]any{"ok": true}, nil)
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("log file not written: %v", err)
+	}
+}
+
 func TestRecorderRecord(t *testing.T) {
 	var buf bytes.Buffer
 	r := &Recorder{w: &buf}

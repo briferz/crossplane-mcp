@@ -146,7 +146,9 @@ whether set via a shell or an MCP client's JSON config (which has no shell to
 expand them); an absolute path always works.
 
 Each tool call appends one JSON line: `{time, tool, durationMs, input, output, error}`.
-The file is created `0600`. Logging goes only to the file/stderr — never stdout,
+The file is created `0600` (with any missing parent directories created `0700`),
+so a fresh path works without a manual `mkdir -p`. Logging goes only to the
+file/stderr — never stdout,
 which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
 may interleave with other process output; use a file for clean JSONL.)
 
