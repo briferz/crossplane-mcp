@@ -21,21 +21,60 @@ const stuckThreshold = 15 * time.Minute
 // months-stuck delete from a transient in-progress one. now is injected for
 // deterministic tests; callers pass nowFn().
 func lifecycleLabel(n *Node, now time.Time) string {
+	if n == nil {
+		return ""
+	}
 	if n.deletionTime != "" {
-		age := humanizeAge(ageSince(n.deletionTime, now))
-		if ageSince(n.deletionTime, now) >= stuckThreshold {
-			return "Terminating (stuck " + age + ")"
+		d := ageSince(n.deletionTime, now)
+		if d >= stuckThreshold {
+			return "Terminating (stuck " + humanizeAge(d) + ")"
 		}
-		return "Terminating (" + age + ")"
+		return "Terminating (" + humanizeAge(d) + ")"
+	}
+	// Not deleting: a Ready node has no "Creating" story (it isn't a suspect
+	// today, but guard so a future caller can't get a bogus label), and a node
+	// that only failed to resolve/fetch lets its Error field tell the story.
+	if n.State == StateReady || (n.creationTime == "" && n.Error != "") {
+		return ""
 	}
 	phase := "blocked"
 	if n.State == StatePending {
 		phase = "pending"
 	}
-	if n.creationTime != "" {
-		return "Creating (" + phase + ", " + humanizeAge(ageSince(n.creationTime, now)) + ")"
+	// Age the "blocked" duration from when the resource entered its failing state
+	// (a condition's LastTransitionTime), not from creation — otherwise a
+	// long-lived resource that broke today reads as a months-old create failure.
+	// Fall back to creation time when no transition time is known.
+	since := blockedSince(n)
+	if since == "" {
+		since = n.creationTime
+	}
+	if since != "" {
+		return "Creating (" + phase + ", " + humanizeAge(ageSince(since, now)) + ")"
 	}
 	return "Creating (" + phase + ")"
+}
+
+// blockedSince returns the timestamp the resource entered its current failing
+// state — the LastTransitionTime of its Ready (else Synced, else Healthy, else
+// any) False/Unknown condition. "" when no such timestamp is recorded.
+func blockedSince(n *Node) string {
+	for _, typ := range []string{TypeReady, TypeSynced, TypeHealthy} {
+		for _, c := range n.Conditions {
+			if c.Type == typ && (c.Status == "False" || c.Status == "Unknown") && c.LastTransitionTime != "" {
+				return c.LastTransitionTime
+			}
+		}
+	}
+	// No canonical health condition carried a time; take the most recent
+	// transition among any failing condition (RFC3339 sorts lexicographically).
+	var latest string
+	for _, c := range n.Conditions {
+		if (c.Status == "False" || c.Status == "Unknown") && c.LastTransitionTime > latest {
+			latest = c.LastTransitionTime
+		}
+	}
+	return latest
 }
 
 // ageSince returns now minus the RFC3339 timestamp ts, clamped at 0 — an

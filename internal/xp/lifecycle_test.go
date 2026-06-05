@@ -18,6 +18,15 @@ func TestLifecycleLabel(t *testing.T) {
 		{"creating-blocked", &Node{State: StateBlocked, creationTime: "2026-05-30T00:00:00Z"}, "Creating (blocked, 5d)"},
 		{"creating-pending", &Node{State: StatePending, creationTime: "2026-06-04T00:00:00Z"}, "Creating (pending, 0s)"},
 		{"no-timestamps-blocked", &Node{State: StateBlocked}, "Creating (blocked)"},
+		// Blocked age comes from the failing condition's transition time, NOT
+		// creation: a 155d-old resource that went Synced=False 3h ago reads "3h".
+		{"blocked-since-condition", &Node{State: StateBlocked, creationTime: "2026-01-01T00:00:00Z",
+			Conditions: []Condition{{Type: TypeSynced, Status: "False", LastTransitionTime: "2026-06-03T21:00:00Z"}}}, "Creating (blocked, 3h)"},
+		// A Ready (non-suspect) node gets no label; an unresolved/NotFound error
+		// node lets its Error field tell the story; nil is safe.
+		{"ready-no-label", &Node{State: StateReady, creationTime: "2026-05-30T00:00:00Z"}, ""},
+		{"error-node-no-label", &Node{State: StatePending, Error: `things.example.org "x" not found`}, ""},
+		{"nil-node", nil, ""},
 		{"future-deletion-clamped", &Node{State: StateBlocked, deletionTime: "2027-01-01T00:00:00Z"}, "Terminating (0s)"},
 		{"unparseable-deletion", &Node{State: StateBlocked, deletionTime: "not-a-timestamp"}, "Terminating (0s)"},
 		// Deletion takes precedence over creation: a terminating resource is

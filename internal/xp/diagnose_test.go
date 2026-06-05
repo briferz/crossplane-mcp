@@ -436,6 +436,27 @@ func TestDiagnoseLifecycle(t *testing.T) {
 	}
 }
 
+// TestDiagnoseDeletingReadySurfaced confirms a resource being deleted is
+// surfaced (and not reported healthy) even when its conditions still say Ready —
+// a finalizer can wedge a teardown while the Ready condition lags.
+func TestDiagnoseDeletingReadySurfaced(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	ready := node(0, "Workspace", "ws",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	ready.deletionTime = "2026-01-15T00:00:00Z"
+	d := Diagnose(context.Background(), &stubEvents{}, ready, Stats{Nodes: 1}, false)
+
+	if d.Healthy {
+		t.Fatal("a resource being deleted must not be reported healthy")
+	}
+	if len(d.Suspects) != 1 || d.Suspects[0].Lifecycle != "Terminating (stuck 140d)" {
+		t.Fatalf("expected the deleting Ready resource surfaced as Terminating, got %+v", d.Suspects)
+	}
+}
+
 func TestFlatten(t *testing.T) {
 	root := node(0, "App", "app",
 		[]Condition{cond("Ready", "True", "", "")},

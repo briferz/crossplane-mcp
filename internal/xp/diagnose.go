@@ -76,10 +76,12 @@ type Diagnosis struct {
 func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, includeTree bool) *Diagnosis {
 	// Collect every non-Ready node, not just Blocked ones: a resource stuck
 	// Pending (Unknown/absent conditions) is still a problem and must not be
-	// reported as healthy.
+	// reported as healthy. Also collect any resource being deleted even if its
+	// conditions still report Ready — a finalizer can wedge a teardown while the
+	// Ready condition lags, and a stuck termination must never be called healthy.
 	var suspects []*Node
 	walk(tree, func(n *Node) {
-		if n.State != StateReady {
+		if n.State != StateReady || n.deletionTime != "" {
 			suspects = append(suspects, n)
 		}
 	})
