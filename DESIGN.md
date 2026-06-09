@@ -198,6 +198,13 @@ servers and over `trace`. Pseudo-logic:
    (`Creating (blocked, 5d)`) — the age (how long stuck) is the signal (#24). The
    age clock is injected (`nowFn`) so the pure logic stays unit-testable; a
    resource being deleted is always labelled Terminating regardless of its age.
+9. **Surface pause + finalizers:** a `crossplane.io/paused: "true"` annotation
+   suspends reconciliation entirely — conditions go stale and finalizers never
+   run — yet nothing in `status` says so. Suspects carry `paused`, a lead
+   reason line, and a paused-aware lifecycle label (`Paused (blocked, 5d)`,
+   `Terminating (paused, 140d)`); tree nodes carry `paused` too. A terminating
+   suspect additionally lists its `metadata.finalizers`, naming what still
+   holds the deletion.
 
 ---
 
@@ -222,7 +229,12 @@ Large k8s objects wreck an LLM context. Defaults:
 - Standard **kubeconfig** (out-of-cluster) and **in-cluster** service account.
 - Context selectable via `list_contexts` + a `context` tool arg.
 - **Read-only by construction:** only `get`/`list`/`watch` verbs are ever
-  issued. Document a minimal read-only `ClusterRole` users can bind.
+  issued — and declared at the protocol level: every tool carries the MCP
+  `readOnlyHint` annotation, and the server publishes workflow instructions.
+- A minimal read-only RBAC manifest ships in [`deploy/rbac.yaml`](./deploy/rbac.yaml):
+  bind the RBAC-manager-maintained aggregated `crossplane-view` role (covers
+  XRD/provider types automatically) + a small events role, or a fully explicit
+  standalone ClusterRole.
 - No secrets in output by default (connection-secret *contents* are never
   returned; presence/status only).
 

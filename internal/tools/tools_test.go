@@ -26,6 +26,50 @@ func TestRegisterAllToolsSchemas(t *testing.T) {
 	Register(s, &k8s.Client{}, nil)
 }
 
+// TestAllToolsDeclareReadOnly lists the tools over a real in-memory MCP session
+// and asserts every one declares readOnlyHint — the protocol-level form of the
+// project's core promise, which lets clients treat the calls as safe (e.g. skip
+// mutation-style confirmation prompts). A new tool that forgets its annotations
+// fails here.
+func TestAllToolsDeclareReadOnly(t *testing.T) {
+	ctx := context.Background()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	Register(s, &k8s.Client{}, nil)
+
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ss, err := s.Connect(ctx, serverT, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	defer func() { _ = ss.Close() }()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0"}, nil).Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	if len(res.Tools) != 5 {
+		t.Fatalf("expected 5 tools, got %d", len(res.Tools))
+	}
+	for _, tool := range res.Tools {
+		a := tool.Annotations
+		if a == nil || !a.ReadOnlyHint {
+			t.Errorf("tool %s must declare readOnlyHint=true", tool.Name)
+			continue
+		}
+		if a.Title == "" {
+			t.Errorf("tool %s should carry a human-readable title", tool.Name)
+		}
+		if a.OpenWorldHint == nil || *a.OpenWorldHint {
+			t.Errorf("tool %s should declare a closed world (the configured cluster)", tool.Name)
+		}
+	}
+}
+
 func uobj(apiVersion, kind, ns, name string, conds ...map[string]any) *unstructured.Unstructured {
 	meta := map[string]any{"name": name}
 	if ns != "" {

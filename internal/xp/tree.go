@@ -31,11 +31,15 @@ type Node struct {
 
 	// Internal, not serialised. deletionTime/creationTime are the object's
 	// metadata timestamps (RFC3339, "" if absent), used to derive the lifecycle
-	// label and surfaced raw on suspects.
+	// label and surfaced raw on suspects. paused/finalizers come from metadata
+	// too: the pause annotation and finalizer list, surfaced on suspects (and
+	// paused also per tree node).
 	uid          string
 	depth        int
 	deletionTime string
 	creationTime string
+	paused       bool
+	finalizers   []string
 }
 
 // Stats reports traversal coverage.
@@ -60,7 +64,12 @@ type FlatNode struct {
 	// DeletionTimestamp is set (RFC3339) when the resource is being deleted —
 	// surfacing a terminating node directly in the tree.
 	DeletionTimestamp string `json:"deletionTimestamp,omitempty"`
-	Error             string `json:"error,omitempty"`
+	// Paused is true when the resource carries the crossplane.io/paused="true"
+	// annotation: reconciliation is suspended, so the node cannot progress (or
+	// finish deleting) until the annotation is removed — and its conditions may
+	// be stale, since nothing updates them while paused.
+	Paused bool   `json:"paused,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // Flatten projects the tree into a depth-first slice of FlatNodes.
@@ -79,6 +88,7 @@ func (n *Node) Flatten() []FlatNode {
 			State:             node.State,
 			Health:            node.Health,
 			DeletionTimestamp: node.deletionTime,
+			Paused:            node.paused,
 			Error:             node.Error,
 		})
 		for _, c := range node.Children {
@@ -130,6 +140,19 @@ func groupOf(apiVersion string) string {
 	return ""
 }
 
+// pausedAnnotation suspends a resource's reconciliation when set to "true" —
+// the standard Crossplane pause switch, honoured by crossplane-runtime managed
+// reconcilers and the composite/claim controllers alike.
+const pausedAnnotation = "crossplane.io/paused"
+
+// IsPaused reports whether the resource carries the Crossplane pause
+// annotation. A paused resource never reconciles: its conditions go stale and
+// a deletion can never complete (finalizers don't run) — and nothing in status
+// says so, which makes it an easy signal to miss.
+func IsPaused(obj *unstructured.Unstructured) bool {
+	return obj.GetAnnotations()[pausedAnnotation] == "true"
+}
+
 // deletionTime returns the object's metadata.deletionTimestamp as RFC3339, or ""
 // when the resource is not being deleted.
 func deletionTime(obj *unstructured.Unstructured) string {
@@ -162,6 +185,8 @@ func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, 
 		depth:        depth,
 		deletionTime: deletionTime(obj),
 		creationTime: metaTimeString(obj.GetCreationTimestamp()),
+		paused:       IsPaused(obj),
+		finalizers:   obj.GetFinalizers(),
 	}
 	st.Nodes++
 

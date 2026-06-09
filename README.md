@@ -53,6 +53,12 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 | `get_resource` | One resource, pruned to conditions, recent events, and spec. |
 | `list_contexts` | Available kubeconfig contexts. |
 
+Every tool declares `readOnlyHint` at the MCP protocol level (so clients can
+treat calls as safe), and the server publishes the recommended
+`list_unhealthy` → `diagnose` → `get_resource` workflow as MCP instructions.
+Kind inputs are forgiving: `Bucket`, `bucket`, and `buckets` all resolve to the
+same kind (exact kind matches always win, so nothing previously valid changes).
+
 ## Install
 
 **Homebrew** (distributed as a cask)
@@ -125,7 +131,33 @@ Each suspect also carries a `lifecycle` label that separates a **wedged teardown
 from a resource **failing to come up**: a resource being deleted shows
 `Terminating (stuck 140d)` (with its `deletionTimestamp` and how long it has
 lingered), while one still provisioning shows `Creating (blocked, 5d)` — so an
-agent routes to "unblock the finalizer" vs "fix the create" immediately.
+agent routes to "unblock the finalizer" vs "fix the create" immediately. A
+terminating suspect also lists its `finalizers`, naming what still holds the
+deletion.
+
+A **paused** resource (`crossplane.io/paused: "true"`) is flagged explicitly:
+the annotation suspends reconciliation entirely — conditions go stale and a
+deletion can never finish — yet nothing in `status` says so. Suspects carry
+`paused: true`, a lead reason, and a `Paused (blocked, 5d)` /
+`Terminating (paused, 140d)` lifecycle label; tree nodes carry `paused` too.
+
+### Least-privilege RBAC
+
+The server only ever issues `get`/`list`/`watch`, so it can run under a role
+that *cannot* mutate anything. [`deploy/rbac.yaml`](./deploy/rbac.yaml) ships
+two ready-made options:
+
+- **Recommended** (standard Crossplane install): bind the aggregated
+  `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains — it
+  automatically covers every XRD-defined and provider-defined resource type as
+  they are installed — plus the small events-viewer role in the manifest
+  (`diagnose` correlates events with each suspect).
+- **Fully explicit** (RBAC manager disabled): the standalone
+  `crossplane-mcp-viewer` ClusterRole, with one rule per XR/MR API group your
+  platform serves.
+
+For a namespace-scoped setup, bind either role with a namespaced `RoleBinding`
+and call `list_unhealthy` with an explicit `namespace`.
 
 ## Flags
 

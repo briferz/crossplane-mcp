@@ -92,6 +92,12 @@ type Target struct {
 // Resolve maps a (apiVersion, kind) pair to a queryable Target. apiVersion may
 // be empty, in which case the kind is resolved by scanning the server's
 // preferred resources; an ambiguous kind returns an error listing candidates.
+//
+// The kind is matched leniently: an exact Kind match always wins, but when none
+// exists it falls back to a case-insensitive match against the Kind and the
+// plural/singular resource names — so "Bucket", "bucket", and "buckets" all
+// resolve. The callers are LLMs, and a failed exact match otherwise costs a
+// whole tool-call round trip.
 func (c *Client) Resolve(apiVersion, kind string) (Target, error) {
 	if kind == "" {
 		return Target{}, fmt.Errorf("kind is required")
@@ -103,6 +109,11 @@ func (c *Client) Resolve(apiVersion, kind string) (Target, error) {
 		}
 		m, err := c.Mapper.RESTMapping(schema.GroupKind{Group: gv.Group, Kind: kind}, gv.Version)
 		if err != nil {
+			// The REST mapper is exact-case; before giving up, retry with the
+			// lenient scan constrained to the requested group/version.
+			if t, lerr := c.scanForKind(kind, &gv); lerr == nil {
+				return t, nil
+			}
 			return Target{}, fmt.Errorf("resolve %s/%s: %w", apiVersion, kind, err)
 		}
 		return Target{
@@ -111,10 +122,16 @@ func (c *Client) Resolve(apiVersion, kind string) (Target, error) {
 			Kind:       kind,
 		}, nil
 	}
-	return c.resolveByKind(kind)
+	return c.scanForKind(kind, nil)
 }
 
-func (c *Client) resolveByKind(kind string) (Target, error) {
+// scanForKind resolves a kind by scanning the server's preferred resources,
+// optionally constrained to one group/version. Exact Kind matches are collected
+// separately from lenient ones (case-insensitive Kind, plural or singular
+// resource name) and win outright when present — so behaviour for a kind that
+// already resolved exactly can never change, and leniency cannot introduce new
+// ambiguity for it.
+func (c *Client) scanForKind(kind string, gv *schema.GroupVersion) (Target, error) {
 	lists, err := c.Disco.ServerPreferredResources()
 	// ServerPreferredResources may return partial results alongside an error
 	// (e.g. an unavailable aggregated API). Only fail if we got nothing.
@@ -122,24 +139,35 @@ func (c *Client) resolveByKind(kind string) (Target, error) {
 		return Target{}, fmt.Errorf("discover resources: %w", err)
 	}
 
-	var matches []Target
+	var exact, lenient []Target
 	for _, list := range lists {
 		if list == nil {
 			continue
 		}
-		gv, perr := schema.ParseGroupVersion(list.GroupVersion)
-		if perr != nil {
+		lgv, perr := schema.ParseGroupVersion(list.GroupVersion)
+		if perr != nil || (gv != nil && lgv != *gv) {
 			continue
 		}
 		for _, r := range list.APIResources {
-			if r.Kind == kind && !strings.Contains(r.Name, "/") {
-				matches = append(matches, Target{
-					GVR:        gv.WithResource(r.Name),
-					Namespaced: r.Namespaced,
-					Kind:       kind,
-				})
+			if strings.Contains(r.Name, "/") { // subresource
+				continue
+			}
+			// Target.Kind is the cluster-canonical casing, not the caller's, so
+			// downstream identity keys and output stay consistent.
+			t := Target{GVR: lgv.WithResource(r.Name), Namespaced: r.Namespaced, Kind: r.Kind}
+			switch {
+			case r.Kind == kind:
+				exact = append(exact, t)
+			case strings.EqualFold(r.Kind, kind),
+				strings.EqualFold(r.Name, kind),
+				strings.EqualFold(r.SingularName, kind):
+				lenient = append(lenient, t)
 			}
 		}
+	}
+	matches := exact
+	if len(matches) == 0 {
+		matches = lenient
 	}
 
 	switch len(matches) {

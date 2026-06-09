@@ -102,4 +102,14 @@ See README "Releasing".
   `internal/xp/lifecycle.go`; the age clock is the injectable `nowFn` so the
   logic stays unit-testable. Additive (FlatNode also surfaces raw
   `deletionTimestamp`); ranking unchanged.
+- Tier-1 usability batch (one PR): every tool declares the MCP `readOnlyHint`
+  annotation and the server publishes workflow `Instructions` (protocol-level
+  read-only promise); kind resolution is **lenient** (case-insensitive +
+  plural/singular resource names, exact Kind matches always win —
+  `internal/k8s/client.go scanForKind`); suspects/tree/get_resource surface
+  **`paused`** (`crossplane.io/paused` — lead reason + `Paused (blocked, Nd)` /
+  `Terminating (paused, Nd)` lifecycle labels) and terminating suspects list
+  **`finalizers`**; a least-privilege read-only RBAC manifest ships in
+  `deploy/rbac.yaml` (aggregated `crossplane-view` + events role, or a
+  standalone explicit ClusterRole).
 - Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.

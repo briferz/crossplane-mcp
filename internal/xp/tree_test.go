@@ -1,6 +1,7 @@
 package xp
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -91,5 +92,66 @@ func TestChildRefs(t *testing.T) {
 				t.Errorf("childRefs()\n got:  %+v\n want: %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsPaused(t *testing.T) {
+	cases := []struct {
+		name        string
+		annotations map[string]any
+		want        bool
+	}{
+		{"paused true", map[string]any{"crossplane.io/paused": "true"}, true},
+		// Crossplane only honours the literal "true" — anything else reconciles.
+		{"paused false", map[string]any{"crossplane.io/paused": "false"}, false},
+		{"paused other value", map[string]any{"crossplane.io/paused": "yes"}, false},
+		{"unrelated annotations", map[string]any{"example.org/team": "a"}, false},
+		{"no annotations", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			meta := map[string]any{"name": "x"}
+			if c.annotations != nil {
+				meta["annotations"] = c.annotations
+			}
+			o := &unstructured.Unstructured{Object: map[string]any{"metadata": meta}}
+			if got := IsPaused(o); got != c.want {
+				t.Errorf("IsPaused() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildTreeCapturesMetadataSignals guards the build() wiring: the pause
+// annotation, finalizers, and deletionTimestamp land on the Node and project
+// into the FlatNode. A childless root never touches the client, so nil is safe.
+func TestBuildTreeCapturesMetadataSignals(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.org/v1",
+		"kind":       "XApp",
+		"metadata": map[string]any{
+			"name":              "app",
+			"annotations":       map[string]any{"crossplane.io/paused": "true"},
+			"finalizers":        []any{"composite.apiextensions.crossplane.io"},
+			"deletionTimestamp": "2026-01-15T00:00:00Z",
+		},
+	}}
+	node, stats := BuildTree(context.Background(), nil, root)
+	if stats.Nodes != 1 {
+		t.Fatalf("expected 1 node, got %d", stats.Nodes)
+	}
+	if !node.paused {
+		t.Error("expected paused captured from the annotation")
+	}
+	if len(node.finalizers) != 1 || node.finalizers[0] != "composite.apiextensions.crossplane.io" {
+		t.Errorf("expected finalizers captured, got %v", node.finalizers)
+	}
+	if node.deletionTime != "2026-01-15T00:00:00Z" {
+		t.Errorf("expected deletionTimestamp captured, got %q", node.deletionTime)
+	}
+
+	flat := node.Flatten()
+	if len(flat) != 1 || !flat[0].Paused || flat[0].DeletionTimestamp == "" {
+		t.Errorf("FlatNode should surface paused + deletionTimestamp, got %+v", flat)
 	}
 }
