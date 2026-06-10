@@ -64,7 +64,8 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 		Description: "Triage the cluster: find broken Crossplane resources without knowing their names. " +
 			"Lists composite resources (XRs) and claims and returns only those whose Ready/Synced condition " +
 			"is not True (by default), each as a tiny row {apiVersion, kind, name, namespace, category, " +
-			"state, ready, synced} ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
+			"state, ready, synced} (plus paused when crossplane.io/paused is set — a paused resource never " +
+			"reconciles) ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
 			"failing?\", then feed an item into diagnose for the root-cause tree, or get_resource for one " +
 			"resource's detail. Output is flat, capped, and ordered most-actionable first (Blocked before " +
 			"Pending), with no condition messages/events. Omitting namespace scans cluster-wide (needs " +

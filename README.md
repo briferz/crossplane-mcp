@@ -139,7 +139,8 @@ A **paused** resource (`crossplane.io/paused: "true"`) is flagged explicitly:
 the annotation suspends reconciliation entirely — conditions go stale and a
 deletion can never finish — yet nothing in `status` says so. Suspects carry
 `paused: true`, a lead reason, and a `Paused (blocked, 5d)` /
-`Terminating (paused, 140d)` lifecycle label; tree nodes carry `paused` too.
+`Terminating (paused, 140d)` lifecycle label; tree nodes and `list_unhealthy`
+triage rows carry `paused` too.
 
 ### Least-privilege RBAC
 
@@ -155,6 +156,13 @@ two ready-made options:
 - **Fully explicit** (RBAC manager disabled): the standalone
   `crossplane-mcp-viewer` ClusterRole, with one rule per XR/MR API group your
   platform serves.
+
+Either way, if your **v2 XRs compose native Kubernetes resources** directly
+(Deployments, ConfigMaps, …), add explicit read rules for those types —
+neither `crossplane-view` nor the Crossplane groups cover them, and without
+read access the tree reports such a child as unreachable. The manifest shows
+how (naming exact resources, never a core-group wildcard, so Secrets stay
+unreadable).
 
 For a namespace-scoped setup, bind either role with a namespaced `RoleBinding`
 and call `list_unhealthy` with an explicit `namespace`.

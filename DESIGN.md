@@ -156,7 +156,7 @@ are pruned JSON: status/conditions/events first, spec trimmed, noise removed.
 | Tool | Purpose | Key output |
 |---|---|---|
 | **`diagnose`** ⭐ | Flagship. Walk the tree from a given resource, find the deepest non-Ready/non-Synced node, rank by likely root cause. | Ordered list of suspect resources w/ full condition messages, reasons, correlated events, and a one-line "likely cause" summary. |
-| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced}` + pre-cap summary counts; RBAC-tolerant notes. |
+| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced, paused?}` + pre-cap summary counts; RBAC-tolerant notes. |
 | `get_resource_tree` | Structured Claim/XR → MR hierarchy with per-node status. The trace equivalent, as JSON. | Nested tree: each node `{kind, name, namespace, ready, synced, healthy, ageSeconds}`. |
 | `get_resource` | One resource, pruned. | status/conditions, recent events, trimmed spec; `managedFields`/`last-applied` stripped. |
 | `list_compositions` | Compositions installed, with mode + function pipeline steps. | `{name, compositeTypeRef, mode, pipeline:[step,functionRef]}`. |

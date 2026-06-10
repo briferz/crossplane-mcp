@@ -579,6 +579,21 @@ func TestDiagnoseTerminatingFinalizers(t *testing.T) {
 	}
 }
 
+// TestDiagnosePausedReadyNotSuspect pins the PR's deliberate scoping: a paused
+// but Ready, non-deleting resource is NOT a diagnose suspect (an intentional
+// pause of a healthy resource is not a failure); it stays visible via the
+// tree's paused flag and get_resource. A future change that lets paused alone
+// create suspects must be a conscious decision that updates this test.
+func TestDiagnosePausedReadyNotSuspect(t *testing.T) {
+	root := node(0, "App", "ok",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	root.paused = true
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+	if !d.Healthy || len(d.Suspects) != 0 {
+		t.Errorf("paused+Ready+non-deleting must not be a suspect; got healthy=%v suspects=%+v", d.Healthy, d.Suspects)
+	}
+}
+
 // TestDiagnosePausedTerminating covers the nastiest pause shape: a deletion
 // that can never finish because the pause prevents finalizers from running.
 func TestDiagnosePausedTerminating(t *testing.T) {

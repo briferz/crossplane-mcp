@@ -52,9 +52,9 @@ func New(kubeconfigPath, contextName string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discovery client: %w", err)
 	}
-	// Cache discovery so resolveByKind (ServerPreferredResources) and the mapper
-	// share results instead of re-hitting the API server on every resolution
-	// during a tree walk.
+	// Cache discovery so scanForKind (ServerPreferredResources /
+	// ServerGroupsAndResources) and the mapper share results instead of
+	// re-hitting the API server on every resolution during a tree walk.
 	cached := memory.NewMemCacheClient(disco)
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(cached)
 
@@ -125,16 +125,28 @@ func (c *Client) Resolve(apiVersion, kind string) (Target, error) {
 	return c.scanForKind(kind, nil)
 }
 
-// scanForKind resolves a kind by scanning the server's preferred resources,
-// optionally constrained to one group/version. Exact Kind matches are collected
-// separately from lenient ones (case-insensitive Kind, plural or singular
-// resource name) and win outright when present — so behaviour for a kind that
-// already resolved exactly can never change, and leniency cannot introduce new
-// ambiguity for it.
+// scanForKind resolves a kind by scanning server discovery, optionally
+// constrained to one group/version. Exact Kind matches are collected separately
+// from lenient ones (case-insensitive Kind, plural or singular resource name)
+// and win outright when present — so behaviour for a kind that already resolved
+// exactly can never change, and leniency cannot introduce new ambiguity for it.
 func (c *Client) scanForKind(kind string, gv *schema.GroupVersion) (Target, error) {
-	lists, err := c.Disco.ServerPreferredResources()
-	// ServerPreferredResources may return partial results alongside an error
-	// (e.g. an unavailable aggregated API). Only fail if we got nothing.
+	// The unconstrained scan reads the preferred-resources view: one version per
+	// group, so a kind served at several versions cannot make itself ambiguous.
+	// A gv-constrained scan must read the full groups+resources view instead —
+	// preferred-resources collapses each group to its preferred version, which
+	// would make a constraint on any *other* served version unmatchable (e.g. a
+	// provider CRD requested at v1beta1 while v1beta2 is preferred). Same full
+	// view DiscoverComposite reads; the gv filter below keeps it unambiguous.
+	var lists []*metav1.APIResourceList
+	var err error
+	if gv == nil {
+		lists, err = c.Disco.ServerPreferredResources()
+	} else {
+		_, lists, err = c.Disco.ServerGroupsAndResources()
+	}
+	// Discovery may return partial results alongside an error (e.g. an
+	// unavailable aggregated API). Only fail if we got nothing.
 	if len(lists) == 0 && err != nil {
 		return Target{}, fmt.Errorf("discover resources: %w", err)
 	}

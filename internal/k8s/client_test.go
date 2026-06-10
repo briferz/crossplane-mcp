@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,18 +12,25 @@ import (
 	"k8s.io/client-go/discovery"
 )
 
-// preferredStub drives ServerPreferredResources directly: the stock discovery
-// fake leaves it unimplemented (it only populates ServerGroupsAndResources), so
-// resolution tests need their own stub. Only the one method Resolve's scan
-// calls is implemented; the rest would panic if reached.
-type preferredStub struct {
+// discoStub drives the two discovery views scanForKind reads — the
+// preferred-resources view (unconstrained scans) and the full
+// groups+resources view (gv-constrained scans) — directly: the stock discovery
+// fake leaves ServerPreferredResources unimplemented, so resolution tests need
+// their own stub. Only the methods Resolve's scan calls are implemented; the
+// rest would panic if reached.
+type discoStub struct {
 	discovery.DiscoveryInterface
-	lists []*metav1.APIResourceList
-	err   error
+	preferred []*metav1.APIResourceList // one entry per group, at its preferred version
+	all       []*metav1.APIResourceList // every served version
+	err       error
 }
 
-func (s preferredStub) ServerPreferredResources() ([]*metav1.APIResourceList, error) {
-	return s.lists, s.err
+func (s discoStub) ServerPreferredResources() ([]*metav1.APIResourceList, error) {
+	return s.preferred, s.err
+}
+
+func (s discoStub) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	return nil, s.all, s.err
 }
 
 // failingMapper rejects every RESTMapping, forcing Resolve's apiVersion path
@@ -48,7 +56,7 @@ func resolveFixture() *Client {
 			{Name: "bucket", SingularName: "bucket", Kind: "LegacyBucket", Namespaced: false},
 		}},
 	}
-	return &Client{Disco: preferredStub{lists: lists}, Mapper: failingMapper{}}
+	return &Client{Disco: discoStub{preferred: lists, all: lists}, Mapper: failingMapper{}}
 }
 
 // TestResolveLenientKind covers the LLM-friendly resolution forms: canonical
@@ -132,4 +140,64 @@ func TestResolveUnknownKind(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `no resource found for kind "Nonexistent"`) {
 		t.Errorf("expected a not-found error, got %v", err)
 	}
+}
+
+// TestResolveAPIVersionNonPreferredVersion guards the discovery-view choice: a
+// gv-constrained lenient scan must see every *served* version, not just each
+// group's preferred one — otherwise a kind requested at v1beta1 while v1beta2
+// is preferred (common for provider CRDs) could never lenient-resolve.
+func TestResolveAPIVersionNonPreferredVersion(t *testing.T) {
+	preferred := []*metav1.APIResourceList{
+		{GroupVersion: "multi.example.org/v1beta2", APIResources: []metav1.APIResource{
+			{Name: "widgets", SingularName: "widget", Kind: "Widget", Namespaced: true},
+		}},
+	}
+	all := append([]*metav1.APIResourceList{
+		{GroupVersion: "multi.example.org/v1beta1", APIResources: []metav1.APIResource{
+			{Name: "widgets", SingularName: "widget", Kind: "Widget", Namespaced: true},
+		}},
+	}, preferred...)
+	cl := &Client{Disco: discoStub{preferred: preferred, all: all}, Mapper: failingMapper{}}
+
+	got, err := cl.Resolve("multi.example.org/v1beta1", "widgets")
+	if err != nil {
+		t.Fatalf("non-preferred served version must lenient-resolve, got error: %v", err)
+	}
+	if got.Kind != "Widget" || got.GVR.Version != "v1beta1" {
+		t.Errorf("expected Widget at the requested v1beta1, got %+v", got)
+	}
+	// The preferred version keeps working through the same path.
+	if got, err := cl.Resolve("multi.example.org/v1beta2", "widget"); err != nil || got.GVR.Version != "v1beta2" {
+		t.Errorf("preferred version should resolve too, got %+v / %v", got, err)
+	}
+}
+
+// TestResolveDiscoveryErrors covers scanForKind's two failure shapes: a total
+// discovery outage hard-fails, and partial discovery with no match surfaces the
+// discovery error so a kind missing due to a degraded API group is diagnosable.
+func TestResolveDiscoveryErrors(t *testing.T) {
+	t.Run("total failure", func(t *testing.T) {
+		cl := &Client{Disco: discoStub{err: errors.New("discovery server down")}, Mapper: failingMapper{}}
+		_, err := cl.Resolve("", "Bucket")
+		if err == nil || !strings.Contains(err.Error(), "discover resources") {
+			t.Errorf("expected a hard discover-resources error, got %v", err)
+		}
+	})
+
+	t.Run("partial with no match", func(t *testing.T) {
+		lists := []*metav1.APIResourceList{
+			{GroupVersion: "s3.example.org/v1", APIResources: []metav1.APIResource{
+				{Name: "buckets", SingularName: "bucket", Kind: "Bucket", Namespaced: true},
+			}},
+		}
+		cl := &Client{Disco: discoStub{preferred: lists, all: lists, err: errors.New("group metrics.k8s.io is unavailable")}, Mapper: failingMapper{}}
+		_, err := cl.Resolve("", "Missing")
+		if err == nil || !strings.Contains(err.Error(), "(discovery error:") {
+			t.Errorf("expected the partial-discovery error surfaced, got %v", err)
+		}
+		// A kind that IS present still resolves despite the partial error.
+		if _, err := cl.Resolve("", "Bucket"); err != nil {
+			t.Errorf("present kind should resolve despite partial discovery, got %v", err)
+		}
+	})
 }

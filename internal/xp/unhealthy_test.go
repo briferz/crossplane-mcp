@@ -129,3 +129,31 @@ func TestBuildUnhealthyEmpty(t *testing.T) {
 		t.Errorf("empty input should yield empty result, got %+v", r)
 	}
 }
+
+// TestBuildUnhealthyPaused confirms the pause annotation is visible at triage
+// time: a paused row says so (its conditions may be stale), an unpaused one
+// carries no paused field (omitempty keeps prior output byte-identical).
+func TestBuildUnhealthyPaused(t *testing.T) {
+	paused := listed("composite", "ex.org/v1", "XApp", "ns1", "frozen", cnd("Ready", "False"))
+	paused.Object.SetAnnotations(map[string]string{"crossplane.io/paused": "true"})
+	in := []k8s.Listed{
+		paused,
+		listed("composite", "ex.org/v1", "XApp", "ns1", "plain", cnd("Ready", "False")),
+	}
+	r := BuildUnhealthy(in, UnhealthyParams{})
+	if len(r.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(r.Items))
+	}
+	for _, it := range r.Items {
+		switch it.Name {
+		case "frozen":
+			if !it.Paused {
+				t.Error("paused resource should carry Paused=true in its triage row")
+			}
+		case "plain":
+			if it.Paused {
+				t.Error("unpaused resource must not carry Paused")
+			}
+		}
+	}
+}

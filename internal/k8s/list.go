@@ -61,7 +61,7 @@ type ListResult struct {
 // It reads ServerGroupsAndResources (not ServerPreferredResources): the former
 // returns every served version with categories intact, so no resource is
 // hidden, and it is the path the client-go discovery fake actually populates.
-// Like resolveByKind, partial discovery (an unavailable aggregated API group)
+// Like scanForKind, partial discovery (an unavailable aggregated API group)
 // is tolerated — it degrades to a note unless discovery returned nothing.
 //
 // Read-only: issues only discovery GET requests.
