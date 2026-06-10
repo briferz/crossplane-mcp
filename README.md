@@ -50,7 +50,7 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 | `diagnose` | Walk the tree from a resource, rank blocking resources (deepest first) with full messages + recent events. **Start here** when you know the resource. |
 | `list_unhealthy` | Triage the whole cluster: list composite resources (XRs) and claims that are not Ready/Synced — tiny rows ready to feed straight into `diagnose`. **Start here** when you don't yet know *what* is broken. |
 | `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. |
-| `get_resource` | One resource, pruned to conditions, recent events, and spec. |
+| `get_resource` | One resource, pruned to conditions, recent events, and spec — plus `paused` and, while terminating, `deletionTimestamp` + `finalizers`. |
 | `list_contexts` | Available kubeconfig contexts. |
 
 Every tool declares `readOnlyHint` at the MCP protocol level (so clients can
@@ -133,14 +133,15 @@ from a resource **failing to come up**: a resource being deleted shows
 lingered), while one still provisioning shows `Creating (blocked, 5d)` — so an
 agent routes to "unblock the finalizer" vs "fix the create" immediately. A
 terminating suspect also lists its `finalizers`, naming what still holds the
-deletion.
+deletion (`get_resource` likewise shows `deletionTimestamp` + `finalizers`
+while a resource is terminating).
 
 A **paused** resource (`crossplane.io/paused: "true"`) is flagged explicitly:
 the annotation suspends reconciliation entirely — conditions go stale and a
 deletion can never finish — yet nothing in `status` says so. Suspects carry
 `paused: true`, a lead reason, and a `Paused (blocked, 5d)` /
-`Terminating (paused, 140d)` lifecycle label; tree nodes and `list_unhealthy`
-triage rows carry `paused` too.
+`Terminating (paused, 140d)` lifecycle label; tree nodes, `list_unhealthy`
+triage rows, and `get_resource` carry `paused` too.
 
 ### Least-privilege RBAC
 
@@ -151,11 +152,11 @@ two ready-made options:
 - **Recommended** (standard Crossplane install): bind the aggregated
   `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains — it
   automatically covers every XRD-defined and provider-defined resource type as
-  they are installed — plus the small events-viewer role in the manifest
-  (`diagnose` correlates events with each suspect).
+  they are installed, and on a default install already includes the events
+  read that `diagnose`/`get_resource` use.
 - **Fully explicit** (RBAC manager disabled): the standalone
-  `crossplane-mcp-viewer` ClusterRole, with one rule per XR/MR API group your
-  platform serves.
+  `crossplane-mcp-viewer` ClusterRole plus the manifest's small events-viewer
+  role, with one rule per XR/MR API group your platform serves.
 
 Either way, if your **v2 XRs compose native Kubernetes resources** directly
 (Deployments, ConfigMaps, …), add explicit read rules for those types —

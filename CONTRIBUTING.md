@@ -48,8 +48,9 @@ Individual targets:
 | `make fmt` | format the tree with `gofmt` |
 
 > `make lint` requires `golangci-lint` v2 on your `PATH`. If you don't have it,
-> run it the same way CI does:
-> `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...`
+> run it the same way CI does (version pinned in
+> [ci.yml](./.github/workflows/ci.yml)):
+> `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...`
 
 ### Trying it against a cluster
 

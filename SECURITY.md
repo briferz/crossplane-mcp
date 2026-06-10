@@ -28,5 +28,6 @@ Please upgrade to the newest version before reporting.
 `get`/`list`/`watch` verbs and never mutates cluster state. It talks to the
 Kubernetes API using the credentials in your kubeconfig (or in-cluster service
 account), so its access is bounded by that identity's RBAC. Granting it a
-least-privilege, read-only role is recommended. Connection-secret *contents* are
+least-privilege, read-only role is recommended — a ready-made manifest ships in
+[`deploy/rbac.yaml`](./deploy/rbac.yaml). Connection-secret *contents* are
 never returned in tool output.

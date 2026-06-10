@@ -39,8 +39,11 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 		Description: "Diagnose a stuck Crossplane resource. Walks the composite (XR) → managed " +
 			"resource tree from the given resource, finds resources with a failing Ready/Synced/" +
 			"Healthy condition, and ranks them so the deepest (most likely root cause) comes first " +
-			"with full, untruncated condition messages and recent events. Use this first when " +
-			"something is not becoming Ready.",
+			"with full, untruncated condition messages and recent events. Suspects also carry a " +
+			"lifecycle label (Terminating (stuck Nd) / Creating (blocked, Nd) / Paused), decoded " +
+			"provider-terraform/OpenTofu error blobs (decodedErrors), a paused flag " +
+			"(crossplane.io/paused), and — while terminating — the finalizers holding deletion. " +
+			"Use this first when something is not becoming Ready.",
 	}, recorded(rec, "diagnose", diagnoseHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -55,7 +58,9 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 		Name:        "get_resource",
 		Annotations: readOnly("Get one resource, pruned"),
 		Description: "Fetch a single Kubernetes/Crossplane resource, pruned to its status conditions, " +
-			"recent events, and spec (noisy fields like managedFields removed).",
+			"recent events, and spec (noisy metadata like managedFields removed). Also surfaces " +
+			"paused (crossplane.io/paused) and, while the resource is terminating, its " +
+			"deletionTimestamp + finalizers.",
 	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{

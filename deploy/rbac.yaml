@@ -8,8 +8,10 @@
 #      `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains.
 #      It automatically aggregates read access to every XRD-defined composite/
 #      claim type and every provider-defined managed-resource type as they are
-#      installed — no per-group maintenance. Pair it with the small events role
-#      below (diagnose correlates events with each suspect resource).
+#      installed — no per-group maintenance — and on a default install it
+#      already includes read access to events and namespaces, so it is
+#      self-sufficient. (The events role below then only matters for installs
+#      that skip the chart's aggregated base roles.)
 #
 #   B. RBAC manager disabled, or you want fully explicit rules: use the
 #      standalone `crossplane-mcp-viewer` ClusterRole below and add one rule
@@ -25,13 +27,17 @@
 #
 # Namespace-scoped alternative (e.g. Crossplane v2 namespaced XRs only): bind
 # either ClusterRole with a namespaced RoleBinding instead of a
-# ClusterRoleBinding. Cluster-scoped v1 XRs and cluster-wide triage are then
-# out of reach, and list_unhealthy must be called with an explicit namespace.
+# ClusterRoleBinding — with Option B, bind crossplane-mcp-events-viewer the
+# same way (Option A's crossplane-view already includes events). Cluster-scoped
+# v1 XRs and cluster-wide triage are then out of reach, and list_unhealthy must
+# be called with an explicit namespace.
 #
 # The subject below is a ServiceAccount for in-cluster use; for a human running
 # the server locally, bind your own User/Group instead.
 ---
-# Events power the "recent events" correlation on every suspect resource.
+# Events power the recent-events output of both diagnose (per suspect) and
+# get_resource. Required with Option B; on a default install Option A's
+# crossplane-view already grants this.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -80,6 +86,8 @@ metadata:
   name: crossplane-mcp
   namespace: crossplane-system
 ---
+# Redundant (harmless) with Option A on a default install; required with
+# Option B.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

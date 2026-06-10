@@ -110,8 +110,9 @@ See README "Releasing".
   ServerGroupsAndResources so non-preferred served versions resolve too);
   suspects/tree/get_resource/`list_unhealthy` rows surface **`paused`**
   (`crossplane.io/paused` — lead reason + `Paused (blocked, Nd)` /
-  `Terminating (paused, Nd)` lifecycle labels) and terminating suspects list
-  **`finalizers`**; a least-privilege read-only RBAC manifest ships in
+  `Terminating (paused, Nd)` lifecycle labels) and terminating suspects (and
+  `get_resource`) list **`finalizers`**; a least-privilege read-only RBAC
+  manifest ships in
   `deploy/rbac.yaml` (aggregated `crossplane-view` + events role, or a
   standalone explicit ClusterRole; native types composed by v2 XRs need
   explicit extra rules — never a core-group wildcard, Secrets must stay

@@ -21,7 +21,8 @@ won't do, and where it's headed. It's a direction, not a commitment — see
 - **LLM-optimized output.** Structured, token-light, and untruncated where it
   matters (full condition messages), so a model gets signal, not noise.
 - **Safe to point at production.** Only `get`/`list`/`watch`; never returns
-  secret *contents*; works under a least-privilege, namespace-scoped role.
+  secret *contents*; works under a least-privilege, namespace-scoped role
+  (ready-made manifest: [deploy/rbac.yaml](./deploy/rbac.yaml)).
 - **Discovery & schema.** Help reason about what providers, functions, and
   compositions exist (and their health), and what fields resources support.
 - **Runs anywhere.** A stdio MCP server with multiple install methods (Homebrew,
@@ -60,6 +61,12 @@ These keep the project focused. They are deliberate, not "not yet."
 - `get_resource_tree`, `get_resource`, `list_contexts`.
 - Handles Crossplane v2 (namespaced XRs) and v1/LegacyCluster.
 - Read-only, token-light output; validated against a live v2 cluster.
+- Usability batch (#36): protocol-level read-only declaration (MCP
+  `readOnlyHint` annotations + server workflow instructions), lenient kind
+  inputs (`Bucket`/`bucket`/`buckets` all resolve), `paused`
+  (`crossplane.io/paused`) and terminating-`finalizers` surfacing across
+  diagnose/tree/triage/get_resource, and a least-privilege RBAC manifest
+  ([deploy/rbac.yaml](./deploy/rbac.yaml)).
 
 ### Phase 2 — Discovery & schema (in progress)
 - ✅ `list_unhealthy` — cluster-wide triage: list not-Ready/not-Synced XRs and
