@@ -26,20 +26,39 @@ func lifecycleLabel(n *Node, now time.Time) string {
 	}
 	if n.deletionTime != "" {
 		d := ageSince(n.deletionTime, now)
-		if d >= stuckThreshold {
+		switch {
+		case n.paused:
+			// Paused trumps "stuck": finalizers cannot run while the pause
+			// annotation is set, so this teardown can never complete at all.
+			return "Terminating (paused, " + humanizeAge(d) + ")"
+		case d >= stuckThreshold:
 			return "Terminating (stuck " + humanizeAge(d) + ")"
+		default:
+			return "Terminating (" + humanizeAge(d) + ")"
 		}
-		return "Terminating (" + humanizeAge(d) + ")"
 	}
 	// Not deleting: a Ready node has no "Creating" story (it isn't a suspect
-	// today, but guard so a future caller can't get a bogus label), and a node
-	// that only failed to resolve/fetch lets its Error field tell the story.
-	if n.State == StateReady || (n.creationTime == "" && n.Error != "") {
+	// today — unless paused, which is worth naming since its conditions may be
+	// stale), and a node that only failed to resolve/fetch lets its Error field
+	// tell the story.
+	if n.State == StateReady {
+		if n.paused {
+			return "Paused"
+		}
+		return ""
+	}
+	if n.creationTime == "" && n.Error != "" {
 		return ""
 	}
 	phase := "blocked"
 	if n.State == StatePending {
 		phase = "pending"
+	}
+	// Paused wins the headline over "Creating": whatever state the resource is
+	// in, it cannot move until the annotation is removed.
+	head := "Creating"
+	if n.paused {
+		head = "Paused"
 	}
 	// Age the "blocked" duration from when the resource entered its failing state
 	// (a condition's LastTransitionTime), not from creation — otherwise a
@@ -50,9 +69,9 @@ func lifecycleLabel(n *Node, now time.Time) string {
 		since = n.creationTime
 	}
 	if since != "" {
-		return "Creating (" + phase + ", " + humanizeAge(ageSince(since, now)) + ")"
+		return head + " (" + phase + ", " + humanizeAge(ageSince(since, now)) + ")"
 	}
-	return "Creating (" + phase + ")"
+	return head + " (" + phase + ")"
 }
 
 // blockedSince returns the timestamp the resource entered its current failing

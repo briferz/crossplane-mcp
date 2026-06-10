@@ -20,6 +20,10 @@ type UnhealthyItem struct {
 	State      string `json:"state"`
 	Ready      string `json:"ready,omitempty"`
 	Synced     string `json:"synced,omitempty"`
+	// Paused is true when the resource carries crossplane.io/paused="true" —
+	// surfaced at triage time because a paused resource never reconciles, so
+	// its row's conditions may be stale and diagnose will route differently.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // UnhealthySummary is the pre-cap tally across everything scanned, so the counts
@@ -82,6 +86,7 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 			State:      state,
 			Ready:      health.Ready,
 			Synced:     health.Synced,
+			Paused:     IsPaused(obj),
 		})
 	}
 

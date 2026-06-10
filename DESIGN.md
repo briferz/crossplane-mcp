@@ -7,7 +7,8 @@ pinpointing the root-cause node, and surfacing full condition messages, events,
 provider errors, and composition-function pipeline failures — structured for an
 LLM, not pretty-printed for a terminal.
 
-> **Status:** design. No code yet.
+> **Status:** living design doc. Phase 1 (diagnostics MVP) is shipped (`v0.x`);
+> the §5 table marks which tools exist vs are planned.
 
 ---
 
@@ -150,33 +151,40 @@ The tree-walker must:
 
 ## 5. Tool surface (v1)
 
-All read-only. Inputs favor `{ kind, name, namespace?, apiVersion? }`. Outputs
-are pruned JSON: status/conditions/events first, spec trimmed, noise removed.
+All read-only. Inputs favor `{ kind, name, namespace?, apiVersion? }`. Kind
+inputs are matched leniently — `Bucket`, `bucket`, and `buckets` all resolve
+(exact Kind matches always win, an ambiguous kind errors with candidate
+apiVersions, and an explicit apiVersion resolves non-preferred served versions
+too). Outputs are pruned JSON: status/conditions/events first, metadata noise
+removed (`get_resource` returns the full spec — pruning drops noise, never
+spec content).
 
 | Tool | Purpose | Key output |
 |---|---|---|
 | **`diagnose`** ⭐ | Flagship. Walk the tree from a given resource, find the deepest non-Ready/non-Synced node, rank by likely root cause. | Ordered list of suspect resources w/ full condition messages, reasons, correlated events, and a one-line "likely cause" summary. |
-| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced}` + pre-cap summary counts; RBAC-tolerant notes. |
-| `get_resource_tree` | Structured Claim/XR → MR hierarchy with per-node status. The trace equivalent, as JSON. | Nested tree: each node `{kind, name, namespace, ready, synced, healthy, ageSeconds}`. |
-| `get_resource` | One resource, pruned. | status/conditions, recent events, trimmed spec; `managedFields`/`last-applied` stripped. |
-| `list_compositions` | Compositions installed, with mode + function pipeline steps. | `{name, compositeTypeRef, mode, pipeline:[step,functionRef]}`. |
-| `describe_composition` | One composition incl. pipeline + which XRs use it. | full pipeline + referenced functions + status. |
-| `list_providers` | Providers + revisions + health. | `{name, installed, healthy, version, revisions}`. |
-| `list_functions` | Composition Functions + revisions + health. | same shape as providers. |
-| `explain_xrd` | An XRD's schema, versions, and `scope`. | API surface a platform engineer can request. |
-| `get_schema` | Field schema for an MR/XR kind (from CRD openAPIV3Schema). | so the model reasons about spec correctness. |
+| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced, paused?}` + pre-cap summary counts; RBAC-tolerant notes. |
+| `get_resource_tree` | Structured Claim/XR → MR hierarchy with per-node status. The trace equivalent, as JSON. | Flat, parent-indexed node list (depth-first): each node `{depth, parent, apiVersion, kind, name, namespace, state, health, deletionTimestamp?, paused?, error?}` + traversal stats (`capped`). |
+| `get_resource` | One resource, pruned. | status/conditions, recent events, full spec (metadata noise dropped); `paused?`; `deletionTimestamp` + `finalizers` while terminating. |
+| `list_compositions` *(planned, Phase 2)* | Compositions installed, with mode + function pipeline steps. | `{name, compositeTypeRef, mode, pipeline:[step,functionRef]}`. |
+| `describe_composition` *(planned, Phase 2)* | One composition incl. pipeline + which XRs use it. | full pipeline + referenced functions + status. |
+| `list_providers` *(planned, Phase 2)* | Providers + revisions + health. | `{name, installed, healthy, version, revisions}`. |
+| `list_functions` *(planned, Phase 2)* | Composition Functions + revisions + health. | same shape as providers. |
+| `explain_xrd` *(planned, Phase 2)* | An XRD's schema, versions, and `scope`. | API surface a platform engineer can request. |
+| `get_schema` *(planned, Phase 2)* | Field schema for an MR/XR kind (from CRD openAPIV3Schema). | so the model reasons about spec correctness. |
 | `list_contexts` | Available kubeconfig contexts. | for multi-cluster selection. |
 
 **Flagship behavior — `diagnose`:** the explicit win over generic k8s MCP
 servers and over `trace`. Pseudo-logic:
 
 1. Resolve the start resource (or accept a Claim/XR/MR).
-2. BFS/DFS the ownership/ref tree, collecting each node's conditions + events.
+2. BFS/DFS the ownership/ref tree, collecting each node's conditions (events
+   are fetched only for the top-ranked suspects, for token economy).
 3. Mark each node `OK` / `degraded` / `blocking`.
 4. Identify the **deepest** `blocking` node(s) — the leaf that's actually
    failing, not the propagated `Ready:False` at the root.
-5. Return ranked suspects with **untruncated** messages + correlated events +
-   (if present) the failing function-pipeline step.
+5. Return ranked suspects with **untruncated** messages + correlated events.
+   (Function-pipeline step attribution is planned — Phase 3; today a pipeline
+   failure surfaces only through its condition/event text.)
 6. **Attribute the cause:** prefer the failing condition message, but when that
    condition is a transient transport flake (`unexpected EOF`, `connection
    reset`, `rpc … Unavailable`, …) and a Crossplane composition/validation
@@ -198,6 +206,18 @@ servers and over `trace`. Pseudo-logic:
    (`Creating (blocked, 5d)`) — the age (how long stuck) is the signal (#24). The
    age clock is injected (`nowFn`) so the pure logic stays unit-testable; a
    resource being deleted is always labelled Terminating regardless of its age.
+9. **Surface pause + finalizers:** a `crossplane.io/paused: "true"` annotation
+   suspends reconciliation entirely — conditions go stale and finalizers never
+   run — yet nothing in `status` says so. Suspects carry `paused`, a lead
+   reason line, and a paused-aware lifecycle label (`Paused (blocked, 5d)`,
+   `Terminating (paused, 140d)`); tree nodes, `list_unhealthy` rows, and
+   `get_resource` carry `paused` too. A terminating suspect additionally lists
+   its `metadata.finalizers`, naming what still holds the deletion
+   (`get_resource` mirrors `deletionTimestamp` + `finalizers` while
+   terminating). Pause alone never makes a Ready, non-deleting resource a
+   suspect — it annotates resources that are already failing or terminating; a
+   paused-but-healthy resource is visible via the `paused` flag on the other
+   surfaces instead.
 
 ---
 
@@ -207,7 +227,10 @@ Large k8s objects wreck an LLM context. Defaults:
 
 - Strip `metadata.managedFields`, `metadata.annotations["kubectl...last-applied"]`,
   and verbose generated annotations.
-- Return **only failing/abnormal** conditions and events unless `verbose:true`.
+- `diagnose` surfaces only failing/Unknown condition messages per suspect and a
+  trimmed event window (the newest few plus the qualifying recurring event);
+  `get_resource` is the full-detail tool — all conditions, the 10 most recent
+  events. (A `verbose` switch remains an idea, not implemented.)
 - Never truncate condition `message`/`reason` (the 64-char trace limit is a bug
   to fix, not copy).
 - Paginate / cap list results; report when results were capped (no silent
@@ -220,9 +243,18 @@ Large k8s objects wreck an LLM context. Defaults:
 ## 7. Auth & safety
 
 - Standard **kubeconfig** (out-of-cluster) and **in-cluster** service account.
-- Context selectable via `list_contexts` + a `context` tool arg.
+- Context selectable via `list_contexts` + the `--context` server flag (one
+  context per server process); a per-call `context` arg is an open question (§9).
 - **Read-only by construction:** only `get`/`list`/`watch` verbs are ever
-  issued. Document a minimal read-only `ClusterRole` users can bind.
+  issued — and declared at the protocol level: every tool carries the MCP
+  `readOnlyHint` annotation, and the server publishes workflow instructions.
+- A minimal read-only RBAC manifest ships in [`deploy/rbac.yaml`](./deploy/rbac.yaml):
+  bind the RBAC-manager-maintained aggregated `crossplane-view` role (covers
+  XRD/provider types automatically, and on a default install already includes
+  events read), or a fully explicit standalone ClusterRole + events role.
+  Native Kubernetes types composed by v2 XRs need explicit extra read rules
+  (never a core-group wildcard — Secrets must stay unreadable); a namespaced
+  `RoleBinding` variant covers namespace-scoped use.
 - No secrets in output by default (connection-secret *contents* are never
   returned; presence/status only).
 

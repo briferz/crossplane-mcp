@@ -32,6 +32,16 @@ func TestLifecycleLabel(t *testing.T) {
 		// Deletion takes precedence over creation: a terminating resource is
 		// always labelled Terminating regardless of how old it is.
 		{"deleting-old-resource", &Node{State: StateBlocked, creationTime: "2020-01-01T00:00:00Z", deletionTime: "2026-06-03T23:00:00Z"}, "Terminating (stuck 1h)"},
+		// Paused: reconciliation is suspended, so it wins the headline — a
+		// paused teardown can never complete (finalizers don't run), even when
+		// younger than the stuck threshold, and a paused create reads Paused,
+		// not Creating. A paused Ready node is still named (conditions may be
+		// stale), where an unpaused one gets no label.
+		{"paused-terminating", &Node{State: StateBlocked, deletionTime: "2026-01-15T00:00:00Z", paused: true}, "Terminating (paused, 140d)"},
+		{"paused-terminating-recent", &Node{State: StateBlocked, deletionTime: "2026-06-03T23:55:00Z", paused: true}, "Terminating (paused, 5m)"},
+		{"paused-blocked", &Node{State: StateBlocked, creationTime: "2026-05-30T00:00:00Z", paused: true}, "Paused (blocked, 5d)"},
+		{"paused-pending-no-timestamps", &Node{State: StatePending, paused: true}, "Paused (pending)"},
+		{"paused-ready", &Node{State: StateReady, paused: true}, "Paused"},
 	}
 	for _, c := range cases {
 		if got := lifecycleLabel(c.node, now); got != c.want {

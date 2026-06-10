@@ -11,6 +11,13 @@ import (
 // maxSuspects caps how many blocking resources we fetch events for and return.
 const maxSuspects = 10
 
+// pausedReason is the lead reason line for a paused suspect. The pause
+// annotation freezes reconciliation entirely, so it explains both a resource
+// that won't progress and one that won't finish deleting — and it is invisible
+// in conditions, which simply go stale.
+const pausedReason = "paused: annotation crossplane.io/paused=true suspends reconciliation — " +
+	"the resource cannot progress or finish deleting until the annotation is removed"
+
 // allEvents requests every event for a suspect from the fetcher (no cap). The
 // per-object set is small — the API server aggregates events by reason+message,
 // and the fetcher already lists them all regardless of limit (the limit only
@@ -40,9 +47,18 @@ type Suspect struct {
 	// teardown vs "Creating (blocked, 5d)" for one failing to come up — so an
 	// agent can tell "unblock the finalizer" from "fix the create" and see how
 	// long it has been stuck.
-	DeletionTimestamp string   `json:"deletionTimestamp,omitempty"`
-	Lifecycle         string   `json:"lifecycle,omitempty"`
-	Reasons           []string `json:"reasons,omitempty"`
+	DeletionTimestamp string `json:"deletionTimestamp,omitempty"`
+	Lifecycle         string `json:"lifecycle,omitempty"`
+	// Paused is true when the resource carries the crossplane.io/paused="true"
+	// annotation. A paused resource never reconciles — it cannot progress or
+	// finish deleting until the annotation is removed — and nothing in its
+	// conditions says so (they simply go stale); Lifecycle and the lead Reason
+	// surface it explicitly.
+	Paused bool `json:"paused,omitempty"`
+	// Finalizers is set only while the resource is terminating: when a teardown
+	// is wedged, the finalizer list names what is still holding deletion.
+	Finalizers []string `json:"finalizers,omitempty"`
+	Reasons    []string `json:"reasons,omitempty"`
 	// DecodedErrors carries the actionable provider error decoded from a
 	// provider-terraform/OpenTofu "… | base64 -d | gunzip" hint embedded in a
 	// condition (or recurring event) message: the base64+gzip blob is decoded
@@ -141,6 +157,10 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			Health:            n.Health,
 			DeletionTimestamp: n.deletionTime,
 			Lifecycle:         lifecycleLabel(n, nowFn()),
+			Paused:            n.paused,
+		}
+		if n.deletionTime != "" {
+			s.Finalizers = n.finalizers
 		}
 		var events []k8s.Event
 		if ev != nil {
@@ -158,6 +178,11 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		// token-light.
 		condMsgs := blockingMessages(n.Conditions)
 		s.Reasons = reasonsWithEvent(condMsgs, events)
+		// A pause gates everything else in Reasons — no condition can change and
+		// no finalizer can run while it is set — so it always reads first.
+		if n.paused {
+			s.Reasons = append([]string{pausedReason}, s.Reasons...)
+		}
 		s.Events = trimEvents(events)
 		// Additively surface any decoded provider-terraform/OpenTofu error blob.
 		// The verbatim condition message stays untouched in Reasons (the literal

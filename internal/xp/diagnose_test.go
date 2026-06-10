@@ -526,6 +526,100 @@ func TestDiagnoseTerminatingCountWording(t *testing.T) {
 	}
 }
 
+// TestDiagnosePausedSuspect confirms a paused, stuck resource surfaces the
+// pause everywhere an agent looks: the Paused field, a Paused lifecycle label,
+// and a lead reason — ahead of the condition messages, which a pause freezes.
+func TestDiagnosePausedSuspect(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	mr := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "ReconcileError", "AccessDenied")})
+	mr.creationTime = "2026-05-30T00:00:00Z"
+	mr.paused = true
+	d := Diagnose(context.Background(), &stubEvents{}, mr, Stats{Nodes: 1}, false)
+
+	s := d.Suspects[0]
+	if !s.Paused {
+		t.Error("expected Paused=true on the suspect")
+	}
+	if s.Lifecycle != "Paused (blocked, 5d)" {
+		t.Errorf("expected Paused lifecycle label, got %q", s.Lifecycle)
+	}
+	if len(s.Reasons) < 2 || !strings.HasPrefix(s.Reasons[0], "paused:") {
+		t.Fatalf("pause must lead the reasons, got %v", s.Reasons)
+	}
+	// The condition message is demoted, never hidden.
+	if !strings.Contains(strings.Join(s.Reasons, " | "), "AccessDenied") {
+		t.Errorf("condition message must survive behind the pause line, got %v", s.Reasons)
+	}
+}
+
+// TestDiagnoseTerminatingFinalizers confirms a terminating suspect names what
+// still holds its deletion, and a non-terminating one stays finalizer-free
+// (token-light: the list only matters once a teardown can wedge on it).
+func TestDiagnoseTerminatingFinalizers(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	leaf := node(0, "Workspace", "ws", []Condition{cond("Ready", "False", "Deleting", "destroy failed")})
+	leaf.deletionTime = "2026-01-15T00:00:00Z"
+	leaf.finalizers = []string{"finalizer.managedresource.crossplane.io"}
+	d := Diagnose(context.Background(), &stubEvents{}, leaf, Stats{Nodes: 1}, false)
+	if got := d.Suspects[0].Finalizers; len(got) != 1 || got[0] != "finalizer.managedresource.crossplane.io" {
+		t.Errorf("terminating suspect should carry its finalizers, got %v", got)
+	}
+
+	mr := node(0, "Bucket", "b", []Condition{cond("Synced", "False", "Err", "boom")})
+	mr.finalizers = []string{"finalizer.managedresource.crossplane.io"}
+	d = Diagnose(context.Background(), &stubEvents{}, mr, Stats{Nodes: 1}, false)
+	if d.Suspects[0].Finalizers != nil {
+		t.Errorf("non-terminating suspect must not carry finalizers, got %v", d.Suspects[0].Finalizers)
+	}
+}
+
+// TestDiagnosePausedReadyNotSuspect pins the PR's deliberate scoping: a paused
+// but Ready, non-deleting resource is NOT a diagnose suspect (an intentional
+// pause of a healthy resource is not a failure); it stays visible via the
+// tree's paused flag and get_resource. A future change that lets paused alone
+// create suspects must be a conscious decision that updates this test.
+func TestDiagnosePausedReadyNotSuspect(t *testing.T) {
+	root := node(0, "App", "ok",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	root.paused = true
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+	if !d.Healthy || len(d.Suspects) != 0 {
+		t.Errorf("paused+Ready+non-deleting must not be a suspect; got healthy=%v suspects=%+v", d.Healthy, d.Suspects)
+	}
+}
+
+// TestDiagnosePausedTerminating covers the nastiest pause shape: a deletion
+// that can never finish because the pause prevents finalizers from running.
+func TestDiagnosePausedTerminating(t *testing.T) {
+	orig := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC) }
+	defer func() { nowFn = orig }()
+
+	ws := node(0, "Workspace", "ws",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	ws.deletionTime = "2026-01-15T00:00:00Z"
+	ws.paused = true
+	ws.finalizers = []string{"finalizer.managedresource.crossplane.io"}
+	d := Diagnose(context.Background(), &stubEvents{}, ws, Stats{Nodes: 1}, false)
+
+	s := d.Suspects[0]
+	if s.Lifecycle != "Terminating (paused, 140d)" {
+		t.Errorf("expected paused-terminating label, got %q", s.Lifecycle)
+	}
+	if len(s.Reasons) == 0 || !strings.HasPrefix(s.Reasons[0], "paused:") {
+		t.Errorf("the pause must be surfaced as a reason even with no failing condition, got %v", s.Reasons)
+	}
+	if len(s.Finalizers) != 1 {
+		t.Errorf("expected the held finalizer surfaced, got %v", s.Finalizers)
+	}
+}
+
 func TestFlatten(t *testing.T) {
 	root := node(0, "App", "app",
 		[]Condition{cond("Ready", "True", "", "")},

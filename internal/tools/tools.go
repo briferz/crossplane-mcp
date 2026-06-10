@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,37 +16,61 @@ import (
 	"github.com/briferz/crossplane-mcp/internal/xp"
 )
 
+// readOnly builds the tool annotations shared by every tool this server
+// registers: all of them are read-only (the project's core promise) and their
+// domain is the configured cluster, not an open world. Declaring it at the
+// protocol level lets MCP clients treat the calls as safe — e.g. skip
+// mutation-style confirmation prompts.
+func readOnly(title string) *mcp.ToolAnnotations {
+	closedWorld := false
+	return &mcp.ToolAnnotations{
+		Title:         title,
+		ReadOnlyHint:  true,
+		OpenWorldHint: &closedWorld,
+	}
+}
+
 // Register adds every diagnostic tool to the server. If rec is non-nil, each
 // tool call's input/output is appended to it for later inspection.
 func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "diagnose",
+		Name:        "diagnose",
+		Annotations: readOnly("Diagnose a stuck Crossplane resource"),
 		Description: "Diagnose a stuck Crossplane resource. Walks the composite (XR) → managed " +
 			"resource tree from the given resource, finds resources with a failing Ready/Synced/" +
 			"Healthy condition, and ranks them so the deepest (most likely root cause) comes first " +
-			"with full, untruncated condition messages and recent events. Use this first when " +
-			"something is not becoming Ready.",
+			"with full, untruncated condition messages and recent events. Suspects also carry a " +
+			"lifecycle label (Terminating (stuck Nd) / Creating (blocked, Nd) / Paused), decoded " +
+			"provider-terraform/OpenTofu error blobs (decodedErrors), a paused flag " +
+			"(crossplane.io/paused), and — while terminating — the finalizers holding deletion. " +
+			"Use this first when something is not becoming Ready.",
 	}, recorded(rec, "diagnose", diagnoseHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "get_resource_tree",
+		Name:        "get_resource_tree",
+		Annotations: readOnly("Get the Crossplane composition tree"),
 		Description: "Return the Crossplane composition tree (Claim/XR → composed/managed resources) " +
 			"rooted at the given resource, with each node's Ready/Synced/Healthy state. Structured " +
 			"equivalent of `crossplane resource trace`, as JSON.",
 	}, recorded(rec, "get_resource_tree", treeHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "get_resource",
+		Name:        "get_resource",
+		Annotations: readOnly("Get one resource, pruned"),
 		Description: "Fetch a single Kubernetes/Crossplane resource, pruned to its status conditions, " +
-			"recent events, and spec (noisy fields like managedFields removed).",
+			"recent events, and spec (noisy metadata like managedFields removed). Also surfaces " +
+			"paused (crossplane.io/paused) and, while the resource is terminating, its " +
+			"deletionTimestamp + finalizers.",
 	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "list_unhealthy",
+		Name:        "list_unhealthy",
+		Annotations: readOnly("List unhealthy Crossplane resources"),
 		Description: "Triage the cluster: find broken Crossplane resources without knowing their names. " +
 			"Lists composite resources (XRs) and claims and returns only those whose Ready/Synced condition " +
 			"is not True (by default), each as a tiny row {apiVersion, kind, name, namespace, category, " +
-			"state, ready, synced} ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
+			"state, ready, synced} (plus paused when crossplane.io/paused is set — a paused resource never " +
+			"reconciles) ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
 			"failing?\", then feed an item into diagnose for the root-cause tree, or get_resource for one " +
 			"resource's detail. Output is flat, capped, and ordered most-actionable first (Blocked before " +
 			"Pending), with no condition messages/events. Omitting namespace scans cluster-wide (needs " +
@@ -55,6 +80,7 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_contexts",
+		Annotations: readOnly("List kubeconfig contexts"),
 		Description: "List the available kubeconfig contexts (empty when running in-cluster).",
 	}, recorded(rec, "list_contexts", contextsHandler(cl)))
 }
@@ -183,15 +209,22 @@ type GetResourceInput struct {
 }
 
 type ResourceView struct {
-	APIVersion string         `json:"apiVersion"`
-	Kind       string         `json:"kind"`
-	Name       string         `json:"name"`
-	Namespace  string         `json:"namespace,omitempty"`
-	State      string         `json:"state"`
-	Health     xp.Health      `json:"health"`
-	Conditions []xp.Condition `json:"conditions,omitempty"`
-	Events     []k8s.Event    `json:"events,omitempty"`
-	Spec       map[string]any `json:"spec,omitempty"`
+	APIVersion string    `json:"apiVersion"`
+	Kind       string    `json:"kind"`
+	Name       string    `json:"name"`
+	Namespace  string    `json:"namespace,omitempty"`
+	State      string    `json:"state"`
+	Health     xp.Health `json:"health"`
+	// Paused is true when the resource carries crossplane.io/paused="true":
+	// reconciliation is suspended and the conditions below may be stale.
+	Paused bool `json:"paused,omitempty"`
+	// DeletionTimestamp and Finalizers are set only while the resource is being
+	// deleted, so a wedged teardown names what is still holding it.
+	DeletionTimestamp string         `json:"deletionTimestamp,omitempty"`
+	Finalizers        []string       `json:"finalizers,omitempty"`
+	Conditions        []xp.Condition `json:"conditions,omitempty"`
+	Events            []k8s.Event    `json:"events,omitempty"`
+	Spec              map[string]any `json:"spec,omitempty"`
 }
 
 func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *ResourceView] {
@@ -211,8 +244,13 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 			Namespace:  obj.GetNamespace(),
 			State:      state,
 			Health:     health,
+			Paused:     xp.IsPaused(obj),
 			Conditions: conds,
 			Spec:       spec,
+		}
+		if dt := obj.GetDeletionTimestamp(); dt != nil && !dt.IsZero() {
+			view.DeletionTimestamp = dt.UTC().Format(time.RFC3339)
+			view.Finalizers = obj.GetFinalizers()
 		}
 		if ev, err := cl.Events(ctx, obj.GetNamespace(), string(obj.GetUID()), 10); err == nil {
 			view.Events = ev

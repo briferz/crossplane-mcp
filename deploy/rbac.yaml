@@ -1,0 +1,132 @@
+# Least-privilege, read-only RBAC for crossplane-mcp.
+#
+# The server only ever issues get/list/watch — these manifests make that
+# contract concrete so it can be pointed at a production cluster under a role
+# that *cannot* mutate anything. Two options:
+#
+#   A. Recommended on a standard Crossplane install: bind the aggregated
+#      `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains.
+#      It automatically aggregates read access to every XRD-defined composite/
+#      claim type and every provider-defined managed-resource type as they are
+#      installed — no per-group maintenance — and on a default install it
+#      already includes read access to events and namespaces, so it is
+#      self-sufficient. (The events role below then only matters for installs
+#      that skip the chart's aggregated base roles.)
+#
+#   B. RBAC manager disabled, or you want fully explicit rules: use the
+#      standalone `crossplane-mcp-viewer` ClusterRole below and add one rule
+#      per XR/MR API group your platform serves (Kubernetes RBAC has no
+#      wildcard matching within group names, so they must be listed).
+#
+# Either way: Crossplane v2 XRs can also compose *native* Kubernetes resources
+# directly (Deployments, ConfigMaps, ...). Neither `crossplane-view` nor the
+# Crossplane-group rules below cover those — without read access the tree walk
+# reports such a composed child as unreachable instead of its real state. Add
+# explicit read rules for the native types your compositions create (see the
+# commented example in crossplane-mcp-viewer).
+#
+# Namespace-scoped alternative (e.g. Crossplane v2 namespaced XRs only): bind
+# either ClusterRole with a namespaced RoleBinding instead of a
+# ClusterRoleBinding — with Option B, bind crossplane-mcp-events-viewer the
+# same way (Option A's crossplane-view already includes events). Cluster-scoped
+# v1 XRs and cluster-wide triage are then out of reach, and list_unhealthy must
+# be called with an explicit namespace.
+#
+# The subject below is a ServiceAccount for in-cluster use; for a human running
+# the server locally, bind your own User/Group instead.
+---
+# Events power the recent-events output of both diagnose (per suspect) and
+# get_resource. Required with Option B; on a default install Option A's
+# crossplane-view already grants this.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-mcp-events-viewer
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+# Option B: standalone viewer for the Crossplane machinery itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-mcp-viewer
+rules:
+  # Crossplane core: XRDs, Compositions (+revisions), packages (Providers,
+  # Functions, Configurations) and their revisions, environment configs, and
+  # Usages (deletion protection).
+  - apiGroups:
+      - apiextensions.crossplane.io
+      - pkg.crossplane.io
+      - protection.crossplane.io
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Add one rule per API group your platform serves. Examples:
+  # - apiGroups: ["platform.example.org"] # your XRD group(s)
+  #   resources: ["*"]
+  #   verbs: ["get", "list", "watch"]
+  # - apiGroups: ["s3.aws.upbound.io", "rds.aws.upbound.io"] # provider MR groups
+  #   resources: ["*"]
+  #   verbs: ["get", "list", "watch"]
+  # Native Kubernetes types composed directly by v2 XRs (also needed with
+  # Option A — crossplane-view does not include them). Prefer naming the exact
+  # resources over a group wildcard: "" (core) contains Secrets, which this
+  # server must never be able to read.
+  # - apiGroups: ["apps"]
+  #   resources: ["deployments", "statefulsets"]
+  #   verbs: ["get", "list", "watch"]
+  # - apiGroups: [""]
+  #   resources: ["configmaps", "services"]
+  #   verbs: ["get", "list", "watch"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crossplane-mcp
+  namespace: crossplane-system
+---
+# Redundant (harmless) with Option A on a default install; required with
+# Option B.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: crossplane-mcp-events-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: crossplane-mcp-events-viewer
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-mcp
+    namespace: crossplane-system
+---
+# Option A binding (recommended): the RBAC-manager-maintained aggregated view
+# role, which tracks XRD- and provider-defined resources automatically.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: crossplane-mcp-crossplane-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: crossplane-view
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-mcp
+    namespace: crossplane-system
+# Option B binding: replace the Option A binding above with this one to use the
+# standalone viewer instead.
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: crossplane-mcp-viewer
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: ClusterRole
+#   name: crossplane-mcp-viewer
+# subjects:
+#   - kind: ServiceAccount
+#     name: crossplane-mcp
+#     namespace: crossplane-system
