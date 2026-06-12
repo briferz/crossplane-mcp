@@ -21,8 +21,9 @@ won't do, and where it's headed. It's a direction, not a commitment — see
 - **LLM-optimized output.** Structured, token-light, and untruncated where it
   matters (full condition messages), so a model gets signal, not noise.
 - **Safe to point at production.** Only `get`/`list`/`watch`; never returns
-  secret *contents*; works under a least-privilege, namespace-scoped role
-  (ready-made manifest: [deploy/rbac.yaml](./deploy/rbac.yaml)).
+  secret *contents*; works under a least-privilege role — namespace-scoped
+  where possible (ready-made manifest: [deploy/rbac.yaml](./deploy/rbac.yaml);
+  the cluster-scoped package-health tools need the cluster-wide binding).
 - **Discovery & schema.** Help reason about what providers, functions, and
   compositions exist (and their health), and what fields resources support.
 - **Runs anywhere.** A stdio MCP server with multiple install methods (Homebrew,
@@ -72,8 +73,11 @@ These keep the project focused. They are deliberate, not "not yet."
 - ✅ `list_unhealthy` — cluster-wide triage: list not-Ready/not-Synced XRs and
   claims (via Crossplane discovery categories) so an agent can find *what* to
   `diagnose` without leaving the server. Shipped from real-world feedback (#24).
-- `list_providers` / `list_functions` — installed packages, revisions, health,
-  and version skew.
+- ✅ `list_providers` / `list_functions` / `list_configurations` — installed
+  packages, revisions, health, and upgrade/version skew (failed unpack,
+  awaiting manual approval, wedged rollout, GC lag), with full condition
+  messages and package events on failing rows. Closes the "MR stuck with a
+  cryptic Synced error and nowhere to go" gap.
 - `list_compositions` / `describe_composition` — including the function pipeline
   steps a Composition runs.
 - `explain_xrd` / `get_schema` — XRD and MR/XR field schemas so a model can

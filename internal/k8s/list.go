@@ -29,6 +29,11 @@ const (
 	CategoryComposite = "composite" // composite resources (XRs): v1 cluster-scoped and v2 namespaced
 	CategoryClaim     = "claim"     // v1 claims (namespaced)
 	CategoryManaged   = "managed"   // provider managed resources
+	// The package manager's CRDs are stamped the same way (stable since
+	// Crossplane v1.11) — the mechanism behind `kubectl get pkg` / `pkgrev`.
+	// All package kinds are cluster-scoped on every Crossplane release.
+	CategoryPackage         = "pkg"    // Provider / Function / Configuration
+	CategoryPackageRevision = "pkgrev" // ProviderRevision / FunctionRevision / ConfigurationRevision
 )
 
 // CompositeKind is a discovered resource type plus the Crossplane category it
@@ -183,6 +188,11 @@ func listSkipNote(k CompositeKind, namespace string, err error) string {
 		if namespace != "" {
 			// A namespace was already given; suggesting one would be contradictory.
 			return fmt.Sprintf("skipped %s in %s: forbidden (RBAC)", gr, namespace)
+		}
+		if !k.Namespaced {
+			// A namespace cannot scope a cluster-scoped kind (packages, v1 XRs),
+			// so suggesting one would be unactionable advice.
+			return fmt.Sprintf("skipped %s: forbidden (RBAC)", gr)
 		}
 		return fmt.Sprintf("skipped %s: forbidden (RBAC); re-call with an explicit namespace to scope within your access", gr)
 	case apierrors.IsNotFound(err):

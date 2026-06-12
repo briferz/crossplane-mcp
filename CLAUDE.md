@@ -18,7 +18,8 @@ resource first, and returns full condition messages + events. See
 - `internal/xp/` — Crossplane diagnostic logic: condition classification, tree
   walk, root-cause ranking. **Pure and unit-tested here** (`*_test.go`).
 - `internal/tools/` — MCP tool registration + handlers (the read-only tools:
-  `diagnose`, `list_unhealthy`, `get_resource_tree`, `get_resource`, `list_contexts`).
+  `diagnose`, `list_unhealthy`, `get_resource_tree`, `get_resource`,
+  `list_providers`, `list_functions`, `list_configurations`, `list_contexts`).
 
 ## Build / test / checks
 
@@ -117,4 +118,31 @@ See README "Releasing".
   standalone explicit ClusterRole; native types composed by v2 XRs need
   explicit extra rules — never a core-group wildcard, Secrets must stay
   unreadable).
-- Phase 2 (planned): provider/function/composition health + XRD/MR schema tools.
+- Package-health tools (`list_providers` / `list_functions` /
+  `list_configurations`, Phase 2): one shared handler factory
+  (`internal/tools/packages.go`) + pure builder (`internal/xp/packages.go`).
+  Discovery is **category-driven** (`pkg`/`pkgrev` constants in
+  `internal/k8s/list.go`, group pinned to `pkg.crossplane.io`) so
+  Function@v1beta1 clusters (Crossplane 1.14–1.16) work with no version
+  branching. **`Classify` ignores `Installed`** — packages use `classifyAll`
+  (fold over ALL conditions; never a type whitelist — the pkg condition
+  vocabulary churns across versions: revision `Healthy` on 1.x vs
+  `RevisionHealthy`+`RuntimeHealthy` on 2.x, `Verified` only 1.19–2.1).
+  Healthy rows are tiny; failing rows add full `reasons`, derived `skew`
+  sentences (from spec/status fields only, never reason strings), `Installing`
+  lifecycle labels (head-parameterized `lifecycleLabelFor`), only-when-signal
+  revision rows (cap 5, keep current/Active/non-Ready), and unhealthy-only
+  events for BOTH package and failing revisions (cluster-scoped → events land
+  in the `default` namespace, which `Client.Events` already handles). Full
+  detail is capped at the first 10 failing rows (`maxDetailedPackages`,
+  mirrors diagnose's `maxSuspects`) — a mass failure (registry outage) goes
+  compact beyond that with a note; the budget is pinned by
+  `TestBuildPackagesMassFailureBudget` (~82 KiB worst case, was 542 KiB
+  uncapped).
+  RBAC-unlistable revisions suppress revision rows/counts and
+  revision-derived skew (`RevisionsListed` guard; the stuck-unpack sentence,
+  derived from package status alone, still renders) — missing data must never
+  read as "no active revision". No RBAC rule changes (both rbac.yaml options
+  already cover `pkg.crossplane.io`).
+- Phase 2 (remaining, planned): composition tools (`list_compositions` /
+  `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

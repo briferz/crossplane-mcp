@@ -9,9 +9,13 @@
 #      It automatically aggregates read access to every XRD-defined composite/
 #      claim type and every provider-defined managed-resource type as they are
 #      installed — no per-group maintenance — and on a default install it
-#      already includes read access to events and namespaces, so it is
-#      self-sufficient. (The events role below then only matters for installs
-#      that skip the chart's aggregated base roles.)
+#      already includes read access to pkg.crossplane.io (the package-health
+#      tools), events, and namespaces, so it is self-sufficient. (The events
+#      role below then only matters for installs that skip the chart's
+#      aggregated base roles.) Caveat — now load-bearing for the package
+#      tools too: crossplane-view only exists/aggregates when the chart's
+#      rbacManager.deploy=true and skipAggregatedClusterRoles=false (both are
+#      defaults); otherwise use Option B.
 #
 #   B. RBAC manager disabled, or you want fully explicit rules: use the
 #      standalone `crossplane-mcp-viewer` ClusterRole below and add one rule
@@ -30,14 +34,21 @@
 # ClusterRoleBinding — with Option B, bind crossplane-mcp-events-viewer the
 # same way (Option A's crossplane-view already includes events). Cluster-scoped
 # v1 XRs and cluster-wide triage are then out of reach, and list_unhealthy must
-# be called with an explicit namespace.
+# be called with an explicit namespace. The package-health tools
+# (list_providers / list_functions / list_configurations) are entirely out of
+# reach too: every pkg.crossplane.io kind is cluster-scoped, and events for
+# cluster-scoped objects land specifically in the "default" namespace (a
+# RoleBinding of crossplane-mcp-events-viewer in "default" is the minimum if
+# cluster-wide events read is undesired).
 #
 # The subject below is a ServiceAccount for in-cluster use; for a human running
 # the server locally, bind your own User/Group instead.
 ---
-# Events power the recent-events output of both diagnose (per suspect) and
-# get_resource. Required with Option B; on a default install Option A's
-# crossplane-view already grants this.
+# Events power the recent-events output of diagnose (per suspect),
+# get_resource, and the package-health tools (which read events for
+# cluster-scoped packages from the "default" namespace). Required with
+# Option B; on a default install Option A's crossplane-view already grants
+# this.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -55,7 +66,10 @@ metadata:
 rules:
   # Crossplane core: XRDs, Compositions (+revisions), packages (Providers,
   # Functions, Configurations) and their revisions, environment configs, and
-  # Usages (deletion protection).
+  # Usages (deletion protection). The pkg.crossplane.io rule is what the
+  # package-health tools (list_providers / list_functions /
+  # list_configurations) list cluster-wide; their events are read from the
+  # "default" namespace (where events for cluster-scoped objects live).
   - apiGroups:
       - apiextensions.crossplane.io
       - pkg.crossplane.io
