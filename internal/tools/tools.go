@@ -79,6 +79,41 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 	}, recorded(rec, "list_unhealthy", listUnhealthyHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_providers",
+		Annotations: readOnly("List Crossplane Providers and their health"),
+		Description: "Check whether a Crossplane Provider package is the real problem. Use when diagnose's " +
+			"deepest suspect is a managed resource stuck with a cryptic Synced/Ready message, or when all " +
+			"MRs of one provider fail together: a crashlooping provider pod, a failed image pull, an " +
+			"incompatible Crossplane version, or an un-approved upgrade (revisionActivationPolicy: Manual) " +
+			"is invisible from the MR itself. Lists every Provider (cluster-scoped; no namespace) with " +
+			"installed/healthy status; non-Ready ones add full untruncated condition messages, recent " +
+			"events (e.g. the UnpackPackage registry error), per-revision health rows, and upgrade-skew " +
+			"notes. A failing revision's name also names its runtime Deployment in the Crossplane install " +
+			"namespace — pivot there (outside this server) for pod-level crash detail. A paused package " +
+			"(crossplane.io/paused) never reconciles, including deletion.",
+	}, recorded(rec, "list_providers", listPackagesHandler(cl, "Provider", "ProviderRevision")))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_functions",
+		Annotations: readOnly("List Crossplane composition Functions and their health"),
+		Description: "Check whether a Crossplane composition Function package is the real problem. Use when " +
+			"a composition pipeline step fails or an XR reports a function/gRPC error: a crashlooping " +
+			"function pod or unhealthy FunctionRevision is invisible from the XR. Same row shape and " +
+			"skew/event handling as list_providers (cluster-scoped; no namespace). Functions require " +
+			"Crossplane >= 1.14; on older clusters the notes say so instead of returning an empty list.",
+	}, recorded(rec, "list_functions", listPackagesHandler(cl, "Function", "FunctionRevision")))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_configurations",
+		Annotations: readOnly("List Crossplane Configurations and their health"),
+		Description: "Check whether a Crossplane Configuration package is the real problem. Use when " +
+			"Compositions or XRDs an XR needs are missing or outdated: the Configuration that ships them " +
+			"may be failing to install, unpack, or resolve its dependencies. Same row shape as " +
+			"list_providers (cluster-scoped; no namespace); Configurations run no pods, so rows never " +
+			"carry runtime health.",
+	}, recorded(rec, "list_configurations", listPackagesHandler(cl, "Configuration", "ConfigurationRevision")))
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_contexts",
 		Annotations: readOnly("List kubeconfig contexts"),
 		Description: "List the available kubeconfig contexts (empty when running in-cluster).",

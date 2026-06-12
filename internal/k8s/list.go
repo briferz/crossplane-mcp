@@ -29,6 +29,11 @@ const (
 	CategoryComposite = "composite" // composite resources (XRs): v1 cluster-scoped and v2 namespaced
 	CategoryClaim     = "claim"     // v1 claims (namespaced)
 	CategoryManaged   = "managed"   // provider managed resources
+	// The package manager's CRDs are stamped the same way (stable since
+	// Crossplane v1.11) — the mechanism behind `kubectl get pkg` / `pkgrev`.
+	// All package kinds are cluster-scoped on every Crossplane release.
+	CategoryPackage         = "pkg"    // Provider / Function / Configuration
+	CategoryPackageRevision = "pkgrev" // ProviderRevision / FunctionRevision / ConfigurationRevision
 )
 
 // CompositeKind is a discovered resource type plus the Crossplane category it

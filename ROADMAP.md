@@ -72,8 +72,11 @@ These keep the project focused. They are deliberate, not "not yet."
 - ✅ `list_unhealthy` — cluster-wide triage: list not-Ready/not-Synced XRs and
   claims (via Crossplane discovery categories) so an agent can find *what* to
   `diagnose` without leaving the server. Shipped from real-world feedback (#24).
-- `list_providers` / `list_functions` — installed packages, revisions, health,
-  and version skew.
+- ✅ `list_providers` / `list_functions` / `list_configurations` — installed
+  packages, revisions, health, and upgrade/version skew (failed unpack,
+  awaiting manual approval, wedged rollout, GC lag), with full condition
+  messages and package events on failing rows. Closes the "MR stuck with a
+  cryptic Synced error and nowhere to go" gap.
 - `list_compositions` / `describe_composition` — including the function pipeline
   steps a Composition runs.
 - `explain_xrd` / `get_schema` — XRD and MR/XR field schemas so a model can

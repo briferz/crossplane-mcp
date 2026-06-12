@@ -1,7 +1,8 @@
 // Command crossplane-mcp is a read-only diagnostic MCP server for Crossplane.
 // It exposes Crossplane-aware tools (diagnose, list_unhealthy,
-// get_resource_tree, get_resource, list_contexts) over stdio for use by an MCP
-// client such as Claude.
+// get_resource_tree, get_resource, list_providers, list_functions,
+// list_configurations, list_contexts) over stdio for use by an MCP client such
+// as Claude.
 package main
 
 import (
@@ -27,6 +28,7 @@ Recommended workflow:
 1. list_unhealthy — when you don't know what is broken: lists composite resources (XRs) and claims that are not Ready/Synced, as tiny rows ready to feed into diagnose.
 2. diagnose — when you know the resource (e.g. a row from list_unhealthy): walks its XR -> managed-resource tree and ranks the deepest blocking resource first, with full condition messages, recent events, decoded provider errors, and lifecycle labels (Terminating/Creating/Paused).
 3. get_resource / get_resource_tree — drill into one resource's conditions+events+spec, or view the whole tree structure.
+4. list_providers / list_functions / list_configurations — when a diagnose suspect carries a cryptic provider/function error, or a managed resource never syncs: check whether the package behind it is unhealthy — full condition messages, the failing revision (whose name names its runtime Deployment), pull-error events, and upgrade skew (failed unpack, awaiting manual approval).
 Use list_contexts to see the available kubeconfig contexts (the server is pinned to one context per process).
 
 Every tool is read-only: only Kubernetes get/list requests are issued, nothing is ever mutated, and Secret values are never read.`

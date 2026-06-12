@@ -95,12 +95,16 @@ The tree-walker must:
 
 - `Ready` condition (availability) — on almost everything.
 - `Synced` condition (reconciliation w/ external API) — on MRs.
-- `Healthy` condition — on `ProviderRevision` / `FunctionRevision`.
+- `Healthy` condition — on `ProviderRevision` / `FunctionRevision` (Crossplane
+  1.x; 2.x splits it into `RevisionHealthy` + `RuntimeHealthy`, so the
+  package tools fold over all conditions rather than naming types).
 - `status.conditions[].message` / `reason` — **the** root-cause text.
 - Events (`kubectl get events` equivalent) — Crossplane's primary signal.
 - Composition function results / pipeline step failures.
 - Package: `Installed` / `Healthy` on Provider/Function/Configuration + revision
-  version skew.
+  version skew (shipped: the `list_providers`/`list_functions`/
+  `list_configurations` tools — note `Classify` deliberately ignores
+  `Installed`, packages use their own fold-over-all-conditions classifier).
 
 ---
 
@@ -167,8 +171,9 @@ spec content).
 | `get_resource` | One resource, pruned. | status/conditions, recent events, full spec (metadata noise dropped); `paused?`; `deletionTimestamp` + `finalizers` while terminating. |
 | `list_compositions` *(planned, Phase 2)* | Compositions installed, with mode + function pipeline steps. | `{name, compositeTypeRef, mode, pipeline:[step,functionRef]}`. |
 | `describe_composition` *(planned, Phase 2)* | One composition incl. pipeline + which XRs use it. | full pipeline + referenced functions + status. |
-| `list_providers` *(planned, Phase 2)* | Providers + revisions + health. | `{name, installed, healthy, version, revisions}`. |
-| `list_functions` *(planned, Phase 2)* | Composition Functions + revisions + health. | same shape as providers. |
+| `list_providers` | Providers + revisions + health: the escalation when an MR's error is cryptic (crashlooping provider pod, failed unpack, un-approved upgrade). | Rows `{apiVersion, kind, name, package, state, installed, healthy, currentRevision, revisionCount}`; failing ones add full `reasons`, `skew` sentences, `lifecycle`, per-revision health rows, and events. The `version` is the verbatim `spec.package` OCI ref (no tag parsing — wrong for digest pins/rewrites). |
+| `list_functions` | Composition Functions + revisions + health. | same shape as providers (Function@v1beta1 clusters, Crossplane 1.14–1.16, resolve via discovery). |
+| `list_configurations` | Configuration packages + revisions + health — the trail when Compositions/XRDs are missing. | same shape (no runtime health; Configurations run no pods). |
 | `explain_xrd` *(planned, Phase 2)* | An XRD's schema, versions, and `scope`. | API surface a platform engineer can request. |
 | `get_schema` *(planned, Phase 2)* | Field schema for an MR/XR kind (from CRD openAPIV3Schema). | so the model reasons about spec correctness. |
 | `list_contexts` | Available kubeconfig contexts. | for multi-cluster selection. |

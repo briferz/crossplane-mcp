@@ -21,6 +21,14 @@ const stuckThreshold = 15 * time.Minute
 // months-stuck delete from a transient in-progress one. now is injected for
 // deterministic tests; callers pass nowFn().
 func lifecycleLabel(n *Node, now time.Time) string {
+	return lifecycleLabelFor(n, now, "Creating")
+}
+
+// lifecycleLabelFor is lifecycleLabel with the coming-up headline verb
+// parameterized: a tree resource that never came up is "Creating", while a
+// package in the same position is "Installing" — identical lifecycle
+// semantics, different verb. Paused still wins the headline over either.
+func lifecycleLabelFor(n *Node, now time.Time, comingUp string) string {
 	if n == nil {
 		return ""
 	}
@@ -54,9 +62,9 @@ func lifecycleLabel(n *Node, now time.Time) string {
 	if n.State == StatePending {
 		phase = "pending"
 	}
-	// Paused wins the headline over "Creating": whatever state the resource is
-	// in, it cannot move until the annotation is removed.
-	head := "Creating"
+	// Paused wins the headline over the coming-up verb: whatever state the
+	// resource is in, it cannot move until the annotation is removed.
+	head := comingUp
 	if n.paused {
 		head = "Paused"
 	}

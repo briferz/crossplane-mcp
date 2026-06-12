@@ -51,11 +51,16 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 | `list_unhealthy` | Triage the whole cluster: list composite resources (XRs) and claims that are not Ready/Synced — tiny rows ready to feed straight into `diagnose`. **Start here** when you don't yet know *what* is broken. |
 | `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. |
 | `get_resource` | One resource, pruned to conditions, recent events, and spec — plus `paused` and, while terminating, `deletionTimestamp` + `finalizers`. |
+| `list_providers` | Every Provider package with installed/healthy state; failing ones add full condition messages, events (e.g. the `UnpackPackage` registry error), per-revision health, and upgrade-skew notes. **Escalate here** when a managed resource's error is cryptic. |
+| `list_functions` | Composition Function packages, same shape — a crashlooping function pod is invisible from the XR. |
+| `list_configurations` | Configuration packages, same shape — the trail when Compositions/XRDs an XR needs are missing. |
 | `list_contexts` | Available kubeconfig contexts. |
 
 Every tool declares `readOnlyHint` at the MCP protocol level (so clients can
 treat calls as safe), and the server publishes the recommended
-`list_unhealthy` → `diagnose` → `get_resource` workflow as MCP instructions.
+`list_unhealthy` → `diagnose` → `get_resource` workflow — escalating to the
+package-health tools when a provider/function is the suspect — as MCP
+instructions.
 Kind inputs are forgiving: `Bucket`, `bucket`, and `buckets` all resolve to the
 same kind (exact kind matches always win, so nothing previously valid changes).
 
@@ -141,7 +146,20 @@ the annotation suspends reconciliation entirely — conditions go stale and a
 deletion can never finish — yet nothing in `status` says so. Suspects carry
 `paused: true`, a lead reason, and a `Paused (blocked, 5d)` /
 `Terminating (paused, 140d)` lifecycle label; tree nodes, `list_unhealthy`
-triage rows, and `get_resource` carry `paused` too.
+triage rows, and `get_resource` carry `paused` too (packages honour the same
+annotation and get the same treatment in the package-health tools).
+
+When the stuck resource's error points at the machinery itself — every MR of
+one provider failing together, a cryptic gRPC/function error, a Composition
+that doesn't exist — **`list_providers` / `list_functions` /
+`list_configurations`** check the package layer: a healthy package costs a
+tiny row, while a failing one shows its full `Installed`/`Healthy` condition
+messages, the failing revision (whose name is also its runtime Deployment's
+name — the pivot to pod logs), recent events such as the `UnpackPackage`
+registry error, and **upgrade skew**: an edited `spec.package` that never
+unpacked, a `Manual`-policy revision waiting for approval with nothing active,
+an old revision still serving while the new one is wedged (e.g. `incompatible
+Crossplane version`), or package health lagging a failing new revision.
 
 ### Least-privilege RBAC
 
@@ -166,7 +184,9 @@ how (naming exact resources, never a core-group wildcard, so Secrets stay
 unreadable).
 
 For a namespace-scoped setup, bind either role with a namespaced `RoleBinding`
-and call `list_unhealthy` with an explicit `namespace`.
+and call `list_unhealthy` with an explicit `namespace`. Note the package-health
+tools are then out of reach: package types are cluster-scoped (and their events
+live in the `default` namespace).
 
 ## Flags
 
