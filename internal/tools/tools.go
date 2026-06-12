@@ -101,7 +101,8 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 			"a composition pipeline step fails or an XR reports a function/gRPC error: a crashlooping " +
 			"function pod or unhealthy FunctionRevision is invisible from the XR. Same row shape and " +
 			"skew/event handling as list_providers (cluster-scoped; no namespace). Functions require " +
-			"Crossplane >= 1.14; on older clusters the notes say so instead of returning an empty list.",
+			"Crossplane >= 1.14; on older clusters the notes say so rather than leaving the empty " +
+			"list unexplained.",
 	}, recorded(rec, "list_functions", listPackagesHandler(cl, "Function", "FunctionRevision")))
 
 	mcp.AddTool(s, &mcp.Tool{

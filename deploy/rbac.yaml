@@ -44,9 +44,11 @@
 # The subject below is a ServiceAccount for in-cluster use; for a human running
 # the server locally, bind your own User/Group instead.
 ---
-# Events power the recent-events output of both diagnose (per suspect) and
-# get_resource. Required with Option B; on a default install Option A's
-# crossplane-view already grants this.
+# Events power the recent-events output of diagnose (per suspect),
+# get_resource, and the package-health tools (which read events for
+# cluster-scoped packages from the "default" namespace). Required with
+# Option B; on a default install Option A's crossplane-view already grants
+# this.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

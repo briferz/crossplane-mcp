@@ -11,8 +11,10 @@ Composite Resource (XR) → Managed Resource (MR) tree, pinpoints the resource
 that is actually blocking, and returns full condition messages, events, and
 provider errors — structured for an LLM, not pretty-printed for a terminal.
 
-> **Status:** early MVP (Phase 1). Read-only by design — only `get`/`list`
-> verbs are ever issued, so it is safe to point at a production cluster.
+> **Status:** early (`0.x`). Phase 1 (diagnostics MVP) shipped; Phase 2
+> (discovery & schema — the package-health tools) in progress. Read-only by
+> design — only `get`/`list` verbs are ever issued, so it is safe to point at
+> a production cluster.
 
 ## Why
 
@@ -52,7 +54,7 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 | `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. |
 | `get_resource` | One resource, pruned to conditions, recent events, and spec — plus `paused` and, while terminating, `deletionTimestamp` + `finalizers`. |
 | `list_providers` | Every Provider package with installed/healthy state; failing ones add full condition messages, events (e.g. the `UnpackPackage` registry error), per-revision health, and upgrade-skew notes. **Escalate here** when a managed resource's error is cryptic. |
-| `list_functions` | Composition Function packages, same shape — a crashlooping function pod is invisible from the XR. |
+| `list_functions` | Composition Function packages, same shape — a crashlooping function pod is invisible from the XR. Needs Crossplane >= 1.14 (`v1beta1` Functions on 1.14–1.16 resolve too); older clusters get an explanatory note, not an unexplained empty list. |
 | `list_configurations` | Configuration packages, same shape — the trail when Compositions/XRDs an XR needs are missing. |
 | `list_contexts` | Available kubeconfig contexts. |
 
@@ -154,13 +156,21 @@ one provider failing together, a cryptic gRPC/function error, a Composition
 that doesn't exist — **`list_providers` / `list_functions` /
 `list_configurations`** check the package layer: a healthy package costs a
 tiny row, while a failing one shows its full `Installed`/`Healthy` condition
-messages, the failing revision (whose name is by default also its runtime
-Deployment's name — the pivot to pod logs), recent events such as the
-`UnpackPackage`
+messages, the failing revision (for providers and functions its name is by
+default also its runtime Deployment's name — the pivot to pod logs;
+Configurations run no pods), recent events such as the `UnpackPackage`
 registry error, and **upgrade skew**: an edited `spec.package` that never
 unpacked, a `Manual`-policy revision waiting for approval with nothing active,
 an old revision still serving while the new one is wedged (e.g. `incompatible
 Crossplane version`), or package health lagging a failing new revision.
+
+The output stays bounded even in a mass failure (a registry outage breaking
+every provider at once): only the first 10 failing packages carry full detail
+(reasons, skew, revisions, events) — further rows go compact with a note;
+re-call with the `name` filter for one package's full detail. Revision rows
+are capped at 5 per package (`revisionsTruncated`), keeping the
+current/Active/failing ones — rows are dropped whole, condition messages are
+never truncated.
 
 ### Least-privilege RBAC
 
@@ -171,8 +181,9 @@ two ready-made options:
 - **Recommended** (standard Crossplane install): bind the aggregated
   `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains — it
   automatically covers every XRD-defined and provider-defined resource type as
-  they are installed, and on a default install already includes the events
-  read that `diagnose`/`get_resource` use.
+  they are installed, and on a default install already includes read access to
+  `pkg.crossplane.io` (what the package-health tools list) and the events read
+  that `diagnose`/`get_resource`/the package-health tools use.
 - **Fully explicit** (RBAC manager disabled): the standalone
   `crossplane-mcp-viewer` ClusterRole plus the manifest's small events-viewer
   role, with one rule per XR/MR API group your platform serves.
@@ -196,6 +207,7 @@ live in the `default` namespace).
 | `--kubeconfig` | `$KUBECONFIG` / `~/.kube/config` | Path to kubeconfig. |
 | `--context` | current-context | Kubeconfig context to use. |
 | `--log-file` | | Append a JSONL record of each tool call to this path (or `-` for stderr). Also via `CROSSPLANE_MCP_LOG_FILE`. |
+| `--log-redact` | `true` | Mask sensitive values in the `--log-file` records; disable with `--log-redact=false`. Also via `CROSSPLANE_MCP_LOG_REDACT=false`. |
 | `--version` | | Print version and exit. |
 
 ## Capturing tool calls

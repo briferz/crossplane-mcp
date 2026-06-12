@@ -18,7 +18,8 @@ resource first, and returns full condition messages + events. See
 - `internal/xp/` — Crossplane diagnostic logic: condition classification, tree
   walk, root-cause ranking. **Pure and unit-tested here** (`*_test.go`).
 - `internal/tools/` — MCP tool registration + handlers (the read-only tools:
-  `diagnose`, `list_unhealthy`, `get_resource_tree`, `get_resource`, `list_contexts`).
+  `diagnose`, `list_unhealthy`, `get_resource_tree`, `get_resource`,
+  `list_providers`, `list_functions`, `list_configurations`, `list_contexts`).
 
 ## Build / test / checks
 
@@ -138,8 +139,10 @@ See README "Releasing".
   compact beyond that with a note; the budget is pinned by
   `TestBuildPackagesMassFailureBudget` (~82 KiB worst case, was 542 KiB
   uncapped).
-  RBAC-unlistable revisions suppress skew/counts (`RevisionsListed` guard) —
-  missing data must never read as "no active revision". No RBAC rule changes
-  (both rbac.yaml options already cover `pkg.crossplane.io`).
+  RBAC-unlistable revisions suppress revision rows/counts and
+  revision-derived skew (`RevisionsListed` guard; the stuck-unpack sentence,
+  derived from package status alone, still renders) — missing data must never
+  read as "no active revision". No RBAC rule changes (both rbac.yaml options
+  already cover `pkg.crossplane.io`).
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

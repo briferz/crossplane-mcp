@@ -21,8 +21,9 @@ won't do, and where it's headed. It's a direction, not a commitment — see
 - **LLM-optimized output.** Structured, token-light, and untruncated where it
   matters (full condition messages), so a model gets signal, not noise.
 - **Safe to point at production.** Only `get`/`list`/`watch`; never returns
-  secret *contents*; works under a least-privilege, namespace-scoped role
-  (ready-made manifest: [deploy/rbac.yaml](./deploy/rbac.yaml)).
+  secret *contents*; works under a least-privilege role — namespace-scoped
+  where possible (ready-made manifest: [deploy/rbac.yaml](./deploy/rbac.yaml);
+  the cluster-scoped package-health tools need the cluster-wide binding).
 - **Discovery & schema.** Help reason about what providers, functions, and
   compositions exist (and their health), and what fields resources support.
 - **Runs anywhere.** A stdio MCP server with multiple install methods (Homebrew,
