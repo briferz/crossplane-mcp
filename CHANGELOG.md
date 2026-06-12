@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/briferz/crossplane-mcp/compare/v0.5.0...v0.6.0) (2026-06-12)
+
+
+### Features
+
+* add list_providers/list_functions/list_configurations package-health tools ([#38](https://github.com/briferz/crossplane-mcp/issues/38)) ([58b5918](https://github.com/briferz/crossplane-mcp/commit/58b591838060f81e6e679caa35cd351981796dd5))
+
 ## [0.5.0](https://github.com/briferz/crossplane-mcp/compare/v0.4.0...v0.5.0) (2026-06-10)
 
 
