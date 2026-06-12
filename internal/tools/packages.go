@@ -21,7 +21,7 @@ const packageGroup = "pkg.crossplane.io"
 type ListPackagesInput struct {
 	Name          string `json:"name,omitempty" jsonschema:"case-insensitive substring matched against the package object name AND its OCI image ref (spec.package) — e.g. 'aws-s3' matches both provider-aws-s3 and xpkg.upbound.io/upbound/provider-aws-s3:v1; omit to list all. Filtered-out packages are excluded from scanned/summary"`
 	UnhealthyOnly bool   `json:"unhealthyOnly,omitempty" jsonschema:"return only packages whose state is Blocked or Pending; default false returns every package — package counts are small, and seeing your suspect listed as Ready is itself the answer (look elsewhere)"`
-	Limit         int    `json:"limit,omitempty" jsonschema:"max items to return (default 100, hard cap 500); truncated is true in the output when more matched. Revision rows per package are separately capped at 5 (revisionsTruncated)"`
+	Limit         int    `json:"limit,omitempty" jsonschema:"max items to return (default 100, hard cap 500); truncated is true in the output when more matched. Revision rows per package are separately capped at 5 (revisionsTruncated), and in a mass failure only the first 10 failing packages carry full detail (reasons/skew/revisions/events) — further failing rows are compact, with a note; use name to drill into one"`
 }
 
 type ListPackagesOutput struct {

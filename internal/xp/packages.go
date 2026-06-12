@@ -94,8 +94,9 @@ type PackageRow struct {
 }
 
 // RevisionRow is one package revision attached to a PackageRow. For providers
-// and functions its name is also the name of the revision's runtime Deployment
-// — the pivot to pod-level detail outside this server.
+// and functions its name is by default also the name of the revision's runtime
+// Deployment (a DeploymentRuntimeConfig can override it) — the pivot to
+// pod-level detail outside this server.
 type RevisionRow struct {
 	Name         string `json:"name"`
 	Revision     int64  `json:"revision"` // spec.revision ordinal; highest = newest
@@ -291,6 +292,35 @@ func BuildPackages(pkgs, revs []k8s.Listed, p PackagesParams) *PackagesResult {
 		items = items[:p.Limit]
 		res.Truncated = true
 	}
+
+	// Full enrichment is reserved for the rows an agent acts on first. In a
+	// mass failure (a registry outage breaks every provider at once) enriching
+	// every row would blow the response to hundreds of KiB; beyond the first
+	// maxDetailedPackages failing rows the row goes compact — identity,
+	// statuses, lifecycle, and counts stay; reasons/skew/revisions are dropped
+	// whole (never clipped) and the note names the drill-down path. Runs after
+	// the Limit cut so the note counts rows actually shipped.
+	detailed, compact := 0, 0
+	for i := range items {
+		if items[i].State == StateReady {
+			continue
+		}
+		if detailed < maxDetailedPackages {
+			detailed++
+			continue
+		}
+		compact++
+		items[i].Reasons = nil
+		items[i].Skew = nil
+		items[i].Revisions = nil
+		items[i].RevisionsTruncated = false
+	}
+	if compact > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"full detail (reasons, skew, revisions) included for the first %d failing packages only; %d more failing rows are compact — re-call with the name filter for one package's full detail",
+			maxDetailedPackages, compact))
+	}
+
 	res.Items = items
 	return res
 }
@@ -531,12 +561,14 @@ func skewSentences(obj *unstructured.Unstructured, row *PackageRow, rows []Revis
 	return skew
 }
 
-// maxPackageEventRows caps how many non-Ready packages get event decoration,
-// mirroring diagnose's maxSuspects.
-const maxPackageEventRows = 10
+// maxDetailedPackages caps how many failing packages get the full treatment —
+// enrichment (reasons/skew/revisions) in BuildPackages and event decoration in
+// DecoratePackageEvents — mirroring diagnose's maxSuspects. Beyond it, rows go
+// compact and the agent drills down per package via the name filter.
+const maxDetailedPackages = 10
 
 // DecoratePackageEvents fetches and attaches events to the first
-// maxPackageEventRows rows with a failing side: a non-Ready package gets its
+// maxDetailedPackages rows with a failing side: a non-Ready package gets its
 // own events, and every rendered non-Ready revision row gets its events even
 // when the parent package still reports Ready — the health-lag window
 // (trigger 2 renders the rows precisely then) must not ship a failing
@@ -560,8 +592,8 @@ func DecoratePackageEvents(ctx context.Context, ef EventFetcher, items []Package
 		if !needsEvents(&items[i]) {
 			continue
 		}
-		if decorated >= maxPackageEventRows {
-			return []string{fmt.Sprintf("events fetched for the first %d failing packages only", maxPackageEventRows)}
+		if decorated >= maxDetailedPackages {
+			return []string{fmt.Sprintf("events fetched for the first %d failing packages only", maxDetailedPackages)}
 		}
 		decorated++
 		// The package object's own events only when the package itself is

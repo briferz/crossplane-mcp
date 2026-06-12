@@ -154,8 +154,9 @@ one provider failing together, a cryptic gRPC/function error, a Composition
 that doesn't exist — **`list_providers` / `list_functions` /
 `list_configurations`** check the package layer: a healthy package costs a
 tiny row, while a failing one shows its full `Installed`/`Healthy` condition
-messages, the failing revision (whose name is also its runtime Deployment's
-name — the pivot to pod logs), recent events such as the `UnpackPackage`
+messages, the failing revision (whose name is by default also its runtime
+Deployment's name — the pivot to pod logs), recent events such as the
+`UnpackPackage`
 registry error, and **upgrade skew**: an edited `spec.package` that never
 unpacked, a `Manual`-policy revision waiting for approval with nothing active,
 an old revision still serving while the new one is wedged (e.g. `incompatible

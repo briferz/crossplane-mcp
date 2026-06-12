@@ -586,6 +586,51 @@ func TestRevisionRowDetails(t *testing.T) {
 	}
 }
 
+// TestBuildPackagesEnrichmentCap pins the mass-failure posture: only the first
+// maxDetailedPackages failing rows keep reasons/skew/revisions; the rest go
+// compact (identity, statuses, lifecycle, counts stay) with an honest note —
+// whole-field omission, never clipping. The note counts shipped rows only.
+func TestBuildPackagesEnrichmentCap(t *testing.T) {
+	var pkgs, revs []k8s.Listed
+	for i := 0; i < maxDetailedPackages+3; i++ {
+		name := fmt.Sprintf("provider-%02d", i)
+		pkgs = append(pkgs, pkgObj("Provider", name, fmt.Sprintf("u%d", i),
+			map[string]any{"package": "xpkg.example.org/" + name + ":v2"},
+			map[string]any{"currentRevision": name + "-1", "currentIdentifier": "xpkg.example.org/" + name + ":v1"},
+			cndR(TypeInstalled, "False", "UnpackingPackage", "cannot unpack package: boom"),
+		))
+		revs = append(revs, revObj("ProviderRevision", name+"-1", fmt.Sprintf("r%d", i), name, 1, "Active",
+			cndR(TypeRevisionHealthy, "False", "UnhealthyPackageRevision", "boom")))
+	}
+
+	r := BuildPackages(pkgs, revs, PackagesParams{RevisionsListed: true})
+	for i, it := range r.Items {
+		detailed := len(it.Reasons) > 0 && len(it.Skew) > 0 && len(it.Revisions) == 1
+		if i < maxDetailedPackages && !detailed {
+			t.Errorf("row %d (%s) should keep full enrichment, got %+v", i, it.Name, it)
+		}
+		if i >= maxDetailedPackages {
+			if it.Reasons != nil || it.Skew != nil || it.Revisions != nil || it.RevisionsTruncated {
+				t.Errorf("row %d (%s) should be compact, got %+v", i, it.Name, it)
+			}
+			// The cheap fields survive so the row still routes the agent.
+			if it.State != StateBlocked || it.Installed != "False" || it.RevisionCount == nil || it.Lifecycle == "" {
+				t.Errorf("compact row %d must keep identity/status/count/lifecycle, got %+v", i, it)
+			}
+		}
+	}
+	if !containsSub(r.Notes, "3 more failing rows are compact") {
+		t.Errorf("expected the compact-rows note, got %v", r.Notes)
+	}
+
+	// With a Limit cutting into the compact region, the note counts only
+	// shipped rows.
+	r = BuildPackages(pkgs, revs, PackagesParams{RevisionsListed: true, Limit: maxDetailedPackages + 1})
+	if !containsSub(r.Notes, "1 more failing rows are compact") || !r.Truncated {
+		t.Errorf("note must count shipped compact rows only, got truncated=%v notes=%v", r.Truncated, r.Notes)
+	}
+}
+
 // uidEvents is an EventFetcher keyed by uid, recording what it was asked.
 type uidEvents struct {
 	asked  []string
@@ -661,15 +706,15 @@ func TestDecoratePackageEvents(t *testing.T) {
 		t.Errorf("the first error must stop all further fetches, asked %v", st.asked)
 	}
 
-	// More than maxPackageEventRows non-Ready rows → cap note, no extra asks.
+	// More than maxDetailedPackages non-Ready rows → cap note, no extra asks.
 	var many []PackageRow
-	for i := 0; i < maxPackageEventRows+2; i++ {
+	for i := 0; i < maxDetailedPackages+2; i++ {
 		many = append(many, PackageRow{State: StateBlocked, uid: fmt.Sprintf("u%d", i)})
 	}
 	st = &uidEvents{}
 	notes = DecoratePackageEvents(context.Background(), st, many)
-	if len(st.asked) != maxPackageEventRows {
-		t.Errorf("expected exactly %d fetches, got %d", maxPackageEventRows, len(st.asked))
+	if len(st.asked) != maxDetailedPackages {
+		t.Errorf("expected exactly %d fetches, got %d", maxDetailedPackages, len(st.asked))
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], "first 10 failing packages") {
 		t.Errorf("expected the cap note, got %v", notes)

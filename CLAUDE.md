@@ -132,7 +132,12 @@ See README "Releasing".
   lifecycle labels (head-parameterized `lifecycleLabelFor`), only-when-signal
   revision rows (cap 5, keep current/Active/non-Ready), and unhealthy-only
   events for BOTH package and failing revisions (cluster-scoped → events land
-  in the `default` namespace, which `Client.Events` already handles).
+  in the `default` namespace, which `Client.Events` already handles). Full
+  detail is capped at the first 10 failing rows (`maxDetailedPackages`,
+  mirrors diagnose's `maxSuspects`) — a mass failure (registry outage) goes
+  compact beyond that with a note; the budget is pinned by
+  `TestBuildPackagesMassFailureBudget` (~82 KiB worst case, was 542 KiB
+  uncapped).
   RBAC-unlistable revisions suppress skew/counts (`RevisionsListed` guard) —
   missing data must never read as "no active revision". No RBAC rule changes
   (both rbac.yaml options already cover `pkg.crossplane.io`).

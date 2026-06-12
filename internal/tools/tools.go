@@ -88,8 +88,9 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 			"is invisible from the MR itself. Lists every Provider (cluster-scoped; no namespace) with " +
 			"installed/healthy status; non-Ready ones add full untruncated condition messages, recent " +
 			"events (e.g. the UnpackPackage registry error), per-revision health rows, and upgrade-skew " +
-			"notes. A failing revision's name also names its runtime Deployment in the Crossplane install " +
-			"namespace — pivot there (outside this server) for pod-level crash detail. A paused package " +
+			"notes. A failing revision's name is by default also its runtime Deployment's name in the " +
+			"Crossplane install namespace (a DeploymentRuntimeConfig can override it) — pivot there " +
+			"(outside this server) for pod-level crash detail. A paused package " +
 			"(crossplane.io/paused) never reconciles, including deletion.",
 	}, recorded(rec, "list_providers", listPackagesHandler(cl, "Provider", "ProviderRevision")))
 
