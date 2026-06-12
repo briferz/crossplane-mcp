@@ -536,8 +536,11 @@ func skewSentences(obj *unstructured.Unstructured, row *PackageRow, rows []Revis
 const maxPackageEventRows = 10
 
 // DecoratePackageEvents fetches and attaches events to the first
-// maxPackageEventRows non-Ready package rows and their rendered non-Ready
-// revision rows. Both objects matter: package events carry the
+// maxPackageEventRows rows with a failing side: a non-Ready package gets its
+// own events, and every rendered non-Ready revision row gets its events even
+// when the parent package still reports Ready — the health-lag window
+// (trigger 2 renders the rows precisely then) must not ship a failing
+// revision blind. Both objects matter: package events carry the
 // unpack/transition/GC story (UnpackPackage holds the verbatim registry
 // error), revision events the parse/lint/dependency story — and recurrence
 // counts live only in events. Fetches are uncapped like diagnose's (the
@@ -554,18 +557,22 @@ func DecoratePackageEvents(ctx context.Context, ef EventFetcher, items []Package
 	}
 	decorated := 0
 	for i := range items {
-		if items[i].State == StateReady {
+		if !needsEvents(&items[i]) {
 			continue
 		}
 		if decorated >= maxPackageEventRows {
-			return []string{fmt.Sprintf("events fetched for the first %d non-Ready packages only", maxPackageEventRows)}
+			return []string{fmt.Sprintf("events fetched for the first %d failing packages only", maxPackageEventRows)}
 		}
 		decorated++
-		ev, err := ef.Events(ctx, "", items[i].uid, allEvents)
-		if err != nil {
-			return []string{"package events unavailable: " + err.Error()}
+		// The package object's own events only when the package itself is
+		// failing — a Ready package's events are just Normal install history.
+		if items[i].State != StateReady {
+			ev, err := ef.Events(ctx, "", items[i].uid, allEvents)
+			if err != nil {
+				return []string{"package events unavailable: " + err.Error()}
+			}
+			items[i].Events = trimEvents(ev)
 		}
-		items[i].Events = trimEvents(ev)
 		for j := range items[i].Revisions {
 			r := &items[i].Revisions[j]
 			if r.State == StateReady {
@@ -579,6 +586,20 @@ func DecoratePackageEvents(ctx context.Context, ef EventFetcher, items []Package
 		}
 	}
 	return nil
+}
+
+// needsEvents reports whether a row has a failing side worth an event fetch:
+// the package itself, or any rendered (already signal-bearing) revision.
+func needsEvents(row *PackageRow) bool {
+	if row.State != StateReady {
+		return true
+	}
+	for _, r := range row.Revisions {
+		if r.State != StateReady {
+			return true
+		}
+	}
+	return false
 }
 
 func nestedStr(obj *unstructured.Unstructured, fields ...string) string {

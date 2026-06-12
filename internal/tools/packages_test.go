@@ -227,6 +227,12 @@ func TestListProvidersRevisionsForbidden(t *testing.T) {
 	for _, n := range out.Notes {
 		if strings.Contains(n, "providerrevisions.pkg.crossplane.io") {
 			noted = true
+			// Cluster-scoped kinds must not get the "re-call with an explicit
+			// namespace" advice — there is no namespace input and a namespace
+			// could not scope them anyway.
+			if strings.Contains(n, "explicit namespace") {
+				t.Errorf("unactionable namespace advice on a cluster-scoped kind: %q", n)
+			}
 		}
 	}
 	if !noted {

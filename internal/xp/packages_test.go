@@ -601,8 +601,10 @@ func (s *uidEvents) Events(_ context.Context, _, uid string, _ int) ([]k8s.Event
 	return s.events[uid], nil
 }
 
-// TestDecoratePackageEvents pins the policy: non-Ready rows only, both package
-// and rendered non-Ready revision uids, error stops everything with one note.
+// TestDecoratePackageEvents pins the policy: failing sides only — a non-Ready
+// package gets its own events, a rendered non-Ready revision gets its events
+// even under a Ready package (the health-lag window), Ready sides never fetch,
+// and an error stops everything with one note.
 func TestDecoratePackageEvents(t *testing.T) {
 	mkItems := func() []PackageRow {
 		return []PackageRow{
@@ -612,21 +614,26 @@ func TestDecoratePackageEvents(t *testing.T) {
 			}},
 			{State: StateReady, uid: "pkg-2"},
 			{State: StatePending, uid: "pkg-3"},
+			// The health-lag shape: package still Ready, rendered revision failing.
+			{State: StateReady, uid: "pkg-4", Revisions: []RevisionRow{
+				{State: StateBlocked, uid: "rev-4"},
+			}},
 		}
 	}
 
 	st := &uidEvents{events: map[string][]k8s.Event{
 		"pkg-1": {{Reason: "UnpackPackage", Message: "cannot unpack package: x", Type: "Warning", Count: 7}},
 		"rev-1": {{Reason: "ResolveDependencies", Message: "cannot resolve package dependencies", Type: "Warning"}},
+		"rev-4": {{Reason: "LintPackage", Message: "incompatible Crossplane version", Type: "Warning"}},
 	}}
 	items := mkItems()
 	notes := DecoratePackageEvents(context.Background(), st, items)
 	if len(notes) != 0 {
 		t.Errorf("no notes expected on success, got %v", notes)
 	}
-	want := []string{"pkg-1", "rev-1", "pkg-3"}
+	want := []string{"pkg-1", "rev-1", "pkg-3", "rev-4"}
 	if fmt.Sprint(st.asked) != fmt.Sprint(want) {
-		t.Errorf("asked %v, want %v (non-Ready only, both objects, Ready revision skipped)", st.asked, want)
+		t.Errorf("asked %v, want %v (failing sides only; Ready package object skipped even when its revision fetches)", st.asked, want)
 	}
 	if len(items[0].Events) != 1 || items[0].Events[0].Reason != "UnpackPackage" {
 		t.Errorf("package events should attach, got %+v", items[0].Events)
@@ -636,6 +643,12 @@ func TestDecoratePackageEvents(t *testing.T) {
 	}
 	if items[0].Revisions[1].Events != nil || items[1].Events != nil {
 		t.Error("Ready rows must not carry events")
+	}
+	if items[3].Events != nil {
+		t.Error("a Ready package must not fetch its own events even when its revision does")
+	}
+	if len(items[3].Revisions[0].Events) != 1 || items[3].Revisions[0].Events[0].Reason != "LintPackage" {
+		t.Errorf("the health-lag revision must carry its events, got %+v", items[3].Revisions[0].Events)
 	}
 
 	st = &uidEvents{err: errors.New("forbidden")}
@@ -658,7 +671,7 @@ func TestDecoratePackageEvents(t *testing.T) {
 	if len(st.asked) != maxPackageEventRows {
 		t.Errorf("expected exactly %d fetches, got %d", maxPackageEventRows, len(st.asked))
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "first 10 non-Ready packages") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "first 10 failing packages") {
 		t.Errorf("expected the cap note, got %v", notes)
 	}
 }

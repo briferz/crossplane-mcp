@@ -189,6 +189,11 @@ func listSkipNote(k CompositeKind, namespace string, err error) string {
 			// A namespace was already given; suggesting one would be contradictory.
 			return fmt.Sprintf("skipped %s in %s: forbidden (RBAC)", gr, namespace)
 		}
+		if !k.Namespaced {
+			// A namespace cannot scope a cluster-scoped kind (packages, v1 XRs),
+			// so suggesting one would be unactionable advice.
+			return fmt.Sprintf("skipped %s: forbidden (RBAC)", gr)
+		}
 		return fmt.Sprintf("skipped %s: forbidden (RBAC); re-call with an explicit namespace to scope within your access", gr)
 	case apierrors.IsNotFound(err):
 		return fmt.Sprintf("skipped %s: not found (CRD removed between discover and list?)", gr)
