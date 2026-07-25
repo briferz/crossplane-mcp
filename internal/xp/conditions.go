@@ -166,16 +166,29 @@ func blockingMessages(cs []Condition) []string {
 		if c.Status == "Unknown" {
 			label += " [Unknown]"
 		}
-		switch {
-		case c.Message != "" && c.Reason != "":
-			msgs = append(msgs, label+": "+c.Reason+" — "+c.Message)
-		case c.Message != "":
-			msgs = append(msgs, label+": "+c.Message)
-		case c.Reason != "":
-			msgs = append(msgs, label+": "+c.Reason)
+		if line := conditionLine(label, c); line != "" {
+			msgs = append(msgs, line)
 		}
 	}
 	return msgs
+}
+
+// conditionLine renders one condition as "Type: Reason — Message", omitting
+// whichever half is absent. Returns "" when the condition carries neither.
+//
+// Extracted so the native readiness rules can reuse it: blockingMessages only
+// ever runs over False/Unknown conditions, but a rule keyed on a True condition
+// (batch/Job Failed, apps/Deployment ReplicaFailure) still needs its text.
+func conditionLine(label string, c Condition) string {
+	switch {
+	case c.Message != "" && c.Reason != "":
+		return label + ": " + c.Reason + " — " + c.Message
+	case c.Message != "":
+		return label + ": " + c.Message
+	case c.Reason != "":
+		return label + ": " + c.Reason
+	}
+	return ""
 }
 
 func str(m map[string]any, key string) string {

@@ -15,6 +15,21 @@ const maxSuspects = 10
 // annotation freezes reconciliation entirely, so it explains both a resource
 // that won't progress and one that won't finish deleting — and it is invisible
 // in conditions, which simply go stale.
+// causeMessages returns the lines explaining why a node is a suspect.
+//
+// Crossplane conditions are preferred when present. A native resource judged by
+// a per-kind rule (native.go) usually has none that blockingMessages can read —
+// a PVC's phase, a StatefulSet's replica counts, and a Job's Failed=True are all
+// invisible to it — so the rule's own explanation is the fallback. Without this
+// a Blocked native resource would be a named suspect with empty reasons, which
+// is the complaint this whole line of work started from.
+func causeMessages(n *Node) []string {
+	if msgs := blockingMessages(n.Conditions); len(msgs) > 0 {
+		return msgs
+	}
+	return n.nativeReasons
+}
+
 // unreachablePrefix labels a reason derived from a fetch failure rather than a
 // condition, so an agent can tell "this resource is broken" from "we could not
 // look at this resource".
@@ -226,7 +241,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		// leadFirst puts the first genuine condition ahead of any transport flake
 		// the controller happened to write first; decodeTFErrors is order-
 		// insensitive and attribute is idempotent under it.
-		condMsgs := leadFirst(blockingMessages(n.Conditions))
+		condMsgs := leadFirst(causeMessages(n))
 		s.Reasons = reasonsWithEvent(condMsgs, events)
 		// A node the walk never fetched has no conditions and no events, so the
 		// fetch error is the only explanation that exists. Without this the
@@ -262,7 +277,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// outside the surfaced window. attribute prefers a recurring composition
 	// event over a transport-flake condition; otherwise it returns the condition
 	// message, preserving the previous behaviour exactly.
-	msg, fromEvent := attribute(blockingMessages(root.Conditions), rootEvents)
+	msg, fromEvent := attribute(causeMessages(root), rootEvents)
 	// An unreachable root has no conditions and no events to attribute over, so
 	// without this the headline names a suspect and then explains nothing.
 	if msg == "" && root.Error != "" {
