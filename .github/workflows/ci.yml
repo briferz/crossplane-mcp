@@ -67,6 +67,36 @@ jobs:
       - name: golangci-lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
+  # Real kube-apiserver + etcd (envtest), no controllers. Covers what the unit
+  # fakes structurally cannot: discovery caching and invalidation, the
+  # involvedObject.uid field selector (dynamicfake ignores field selectors
+  # entirely), Crossplane discovery categories over the real aggregated-discovery
+  # wire, and both v1 and v2 composed-ref tree shapes against an apiserver that
+  # actually stores and serves the objects.
+  #
+  # NOT in the branch ruleset's required checks on purpose. It is deliberately
+  # allowed to burn in for a while first: a new check promoted straight to
+  # required blocks every merge on its first flake, and under strict required
+  # checks every push to main then forces a re-run across all open PRs.
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The apiserver/etcd tarball is ~60MB and version-pinned, so it is worth
+      # caching; a miss just re-downloads rather than failing.
+      - name: cache envtest binaries
+        uses: actions/cache@v4
+        with:
+          path: bin/envtest
+          key: envtest-${{ runner.os }}-1.36.2
+      - name: integration tests (envtest)
+        run: make e2e-envtest
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
@@ -91,7 +121,7 @@ jobs:
   # workflow file, which is nobody in particular.
   notify-scheduled-failure:
     name: notify on scheduled failure
-    needs: [build-test, lint, govulncheck]
+    needs: [build-test, lint, integration, govulncheck]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     permissions:
