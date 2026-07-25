@@ -39,32 +39,59 @@ func cond(t, status, reason, msg string) Condition {
 
 func TestClassify(t *testing.T) {
 	tests := []struct {
-		name  string
-		conds []Condition
-		want  string
+		name       string
+		apiVersion string
+		conds      []Condition
+		want       string
 	}{
-		{"ready+synced true", []Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")}, StateReady},
-		{"ready false blocks", []Condition{cond("Ready", "False", "Waiting", "not yet"), cond("Synced", "True", "", "")}, StateBlocked},
-		{"synced false blocks", []Condition{cond("Ready", "True", "", ""), cond("Synced", "False", "ApplyErr", "boom")}, StateBlocked},
-		{"unknown is pending", []Condition{cond("Ready", "Unknown", "", "")}, StatePending},
-		{"no conditions is pending", nil, StatePending},
-		{"healthy false blocks", []Condition{cond("Healthy", "False", "Unpacking", "bad pkg")}, StateBlocked},
+		{"ready+synced true", "example.org/v1", []Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")}, StateReady},
+		{"ready false blocks", "example.org/v1", []Condition{cond("Ready", "False", "Waiting", "not yet"), cond("Synced", "True", "", "")}, StateBlocked},
+		{"synced false blocks", "example.org/v1", []Condition{cond("Ready", "True", "", ""), cond("Synced", "False", "ApplyErr", "boom")}, StateBlocked},
+		{"unknown is pending", "example.org/v1", []Condition{cond("Ready", "Unknown", "", "")}, StatePending},
+		{"no conditions is pending", "example.org/v1", nil, StatePending},
+		{"healthy false blocks", "example.org/v1", []Condition{cond("Healthy", "False", "Unpacking", "bad pkg")}, StateBlocked},
+
+		// Native Kubernetes groups carry no Crossplane vocabulary, so their
+		// silence means "not assessable", not "not ready yet".
+		{"core group no conditions is unknown", "v1", nil, StateUnknown},
+		{"native foreign vocabulary is unknown", "apps/v1", []Condition{cond("Available", "True", "", ""), cond("Progressing", "True", "", "")}, StateUnknown},
+		{"k8s.io suffix is native", "networking.k8s.io/v1", nil, StateUnknown},
+
+		// ...but the group is consulted ONLY when the vocabulary is absent. A Pod
+		// carries a real Ready condition and must classify on it.
+		{"native with Ready true is ready", "v1", []Condition{cond("Ready", "True", "", "")}, StateReady},
+		{"native with Ready false is blocked", "v1", []Condition{cond("Ready", "False", "Unschedulable", "no nodes")}, StateBlocked},
+
+		// A Crossplane resource that has not reported conditions yet must stay
+		// Pending — the constraint that stops this fix from hiding fresh MRs.
+		{"fresh managed resource stays pending", "s3.aws.upbound.io/v1beta1", nil, StatePending},
+		{"XRD group stays pending", "platform.acme.io/v1", nil, StatePending},
+		{"x-k8s.io is not k8s.io", "cluster.x-k8s.io/v1beta1", nil, StatePending},
+		{"apps.example.org is not the apps group", "apps.example.org/v1", nil, StatePending},
+		{"unknown provenance stays pending", "", nil, StatePending},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, got := Classify(tt.conds); got != tt.want {
-				t.Errorf("Classify() = %q, want %q", got, tt.want)
+			if _, got := Classify(tt.apiVersion, tt.conds); got != tt.want {
+				t.Errorf("Classify(%q) = %q, want %q", tt.apiVersion, got, tt.want)
 			}
 		})
 	}
 }
 
-// buildNode is a test helper to construct a tree node with state derived from
-// its conditions.
+// node builds a tree node with state derived from its conditions, under a
+// Crossplane-shaped API group.
 func node(depth int, kind, name string, conds []Condition, children ...*Node) *Node {
-	h, state := Classify(conds)
+	return nodeAPI(depth, "example.org/v1", kind, name, conds, children...)
+}
+
+// nodeAPI is node with the API group parameterized, for the cases where the
+// group itself is what's under test — Classify consults it to tell a native
+// Kubernetes resource from a Crossplane one that hasn't reported yet.
+func nodeAPI(depth int, apiVersion, kind, name string, conds []Condition, children ...*Node) *Node {
+	h, state := Classify(apiVersion, conds)
 	return &Node{
-		APIVersion: "example.org/v1",
+		APIVersion: apiVersion,
 		Kind:       kind,
 		Name:       name,
 		State:      state,

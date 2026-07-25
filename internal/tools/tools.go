@@ -50,7 +50,9 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 		Name:        "get_resource_tree",
 		Annotations: readOnly("Get the Crossplane composition tree"),
 		Description: "Return the Crossplane composition tree (Claim/XR → composed/managed resources) " +
-			"rooted at the given resource, with each node's Ready/Synced/Healthy state. Structured " +
+			"rooted at the given resource, with each node's Ready/Synced/Healthy state. Native " +
+			"Kubernetes resources composed by a v2 XR report state Unknown: they never carry those " +
+			"conditions, so their readiness is not assessed. Structured " +
 			"equivalent of `crossplane resource trace`, as JSON.",
 	}, recorded(rec, "get_resource_tree", treeHandler(cl)))
 
@@ -271,7 +273,7 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 			return nil, nil, err
 		}
 		conds := xp.Conditions(obj)
-		health, state := xp.Classify(conds)
+		health, state := xp.Classify(obj.GetAPIVersion(), conds)
 		spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
 
 		view := &ResourceView{

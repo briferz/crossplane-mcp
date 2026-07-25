@@ -144,5 +144,15 @@ See README "Releasing".
   derived from package status alone, still renders) — missing data must never
   read as "no active revision". No RBAC rule changes (both rbac.yaml options
   already cover `pkg.crossplane.io`).
+- **`Classify` is apiVersion-aware** (`internal/xp/conditions.go`): a resource in
+  a built-in Kubernetes API group (core, `apps`/`batch`/`autoscaling`/`policy`/
+  `extensions`, or `*.k8s.io`) carrying none of `Ready`/`Synced`/`Healthy`
+  classifies **`StateUnknown`** — never a diagnose suspect unless terminating, no
+  lifecycle label, and excluded from the "all Ready" claim. A conditions-less
+  resource in a provider/XRD group stays `StatePending`, because a fresh MR must
+  not read as healthy. The group is consulted **only** when the vocabulary is
+  absent, so a native object that does carry `Ready` still classifies on it.
+  Without this, every native resource a v2 XR composes was a permanent suspect
+  and frequently the named root cause.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

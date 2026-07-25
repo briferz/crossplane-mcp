@@ -51,7 +51,7 @@ tool, **not** a general-purpose Kubernetes tool, and has **no GUI**.
 |---|---|
 | `diagnose` | Walk the tree from a resource, rank blocking resources (deepest first) with full messages + recent events. **Start here** when you know the resource. |
 | `list_unhealthy` | Triage the whole cluster: list composite resources (XRs) and claims that are not Ready/Synced — tiny rows ready to feed straight into `diagnose`. **Start here** when you don't yet know *what* is broken. |
-| `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. |
+| `get_resource_tree` | The composition tree as a flat, parent-indexed node list with per-node Ready/Synced/Healthy state. Native Kubernetes resources composed by a v2 XR report `Unknown` — they never carry those conditions, and are never named as diagnose suspects. |
 | `get_resource` | One resource, pruned to conditions, recent events, and spec — plus `paused` and, while terminating, `deletionTimestamp` + `finalizers`. |
 | `list_providers` | Every Provider package with installed/healthy state; failing ones add full condition messages, events (e.g. the `UnpackPackage` registry error), per-revision health, and upgrade-skew notes. **Escalate here** when a managed resource's error is cryptic. |
 | `list_functions` | Composition Function packages, same shape — a crashlooping function pod is invisible from the XR. Needs Crossplane >= 1.14 (`v1beta1` Functions on 1.14–1.16 resolve too); older clusters get an explanatory note, not an unexplained empty list. |

@@ -96,7 +96,7 @@ func TestClassifyAll(t *testing.T) {
 	// Contrast pin: today's Classify really does mis-read the same condition
 	// set — the reason classifyAll exists. If Classify ever learns Installed,
 	// revisit whether classifyAll is still needed.
-	if _, got := Classify([]Condition{{Type: TypeInstalled, Status: "False"}, {Type: TypeHealthy, Status: "True"}}); got != StateReady {
+	if _, got := Classify("pkg.crossplane.io/v1", []Condition{{Type: TypeInstalled, Status: "False"}, {Type: TypeHealthy, Status: "True"}}); got != StateReady {
 		t.Errorf("expected Classify to (wrongly) report Ready for Installed:False, got %s — classifyAll may be redundant now", got)
 	}
 }

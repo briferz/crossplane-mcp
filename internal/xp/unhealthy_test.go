@@ -10,7 +10,8 @@ import (
 )
 
 // listed builds a k8s.Listed test fixture. Passing no conditions leaves
-// status.conditions absent, which Classify treats as Pending.
+// status.conditions absent, which Classify treats as Pending for a Crossplane
+// API group (and Unknown for a built-in Kubernetes one).
 func listed(category, apiVersion, kind, ns, name string, conds ...map[string]any) k8s.Listed {
 	meta := map[string]any{"name": name}
 	if ns != "" {
