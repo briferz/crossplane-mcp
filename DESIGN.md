@@ -176,7 +176,7 @@ spec content).
 | Tool | Purpose | Key output |
 |---|---|---|
 | **`diagnose`** ⭐ | Flagship. Walk the tree from a given resource, find the deepest non-Ready/non-Synced node, rank by likely root cause. | Ordered list of suspect resources w/ full condition messages, reasons, correlated events, and a one-line "likely cause" summary. |
-| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced, paused?}` + pre-cap summary counts; RBAC-tolerant notes. |
+| `list_unhealthy` | Cluster-wide triage: discover XRs + claims (via Crossplane discovery categories) and return the not-Ready/not-Synced ones. Answers "what is broken?" before `diagnose`. | Flat rows `{apiVersion, kind, name, namespace, category, state, ready, synced, paused?, deletionTimestamp?}` + pre-cap summary counts (with a disjoint `terminating` bucket, so a frozen-Ready teardown cannot tally as Ready); RBAC-tolerant notes. |
 | `get_resource_tree` | Structured Claim/XR → MR hierarchy with per-node status. The trace equivalent, as JSON. | Flat, parent-indexed node list (depth-first): each node `{depth, parent, apiVersion, kind, name, namespace, state, health, deletionTimestamp?, paused?, error?}` + traversal stats (`capped`). |
 | `get_resource` | One resource, pruned. | status/conditions, recent events, full spec (metadata noise dropped); `paused?`; `deletionTimestamp` + `finalizers` while terminating. |
 | `list_compositions` *(planned, Phase 2)* | Compositions installed, with mode + function pipeline steps. | `{name, compositeTypeRef, mode, pipeline:[step,functionRef]}`. |

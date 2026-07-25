@@ -44,7 +44,16 @@ type Node struct {
 
 // Stats reports traversal coverage.
 type Stats struct {
-	Nodes  int  `json:"nodes"`
+	Nodes int `json:"nodes"`
+	// Capped is true when a safety limit actually stopped the walk from
+	// inspecting something — not merely when a limit was reached. Anything built
+	// from a capped walk is incomplete: the deepest-first ranking ran over a
+	// partial tree, so the named root cause may not be the real one.
+	//
+	// Residual over-approximation, deliberately: once the node budget is spent, a
+	// ref that would have been skipped anyway (already visited, or malformed)
+	// still flips this. Over-reporting incompleteness is safe; under-reporting is
+	// not.
 	Capped bool `json:"capped,omitempty"`
 }
 
@@ -190,12 +199,22 @@ func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, 
 	}
 	st.Nodes++
 
-	if depth >= maxDepth || st.Nodes >= maxNodes {
-		st.Capped = true
+	// Capped must mean "a limit actually stopped us from inspecting something",
+	// not merely "a limit was reached": a final leaf sitting exactly at maxDepth
+	// with no children has skipped nothing, and reporting that as an incomplete
+	// walk would make diagnose withhold a healthy verdict for no reason.
+	refs := childRefs(obj)
+	if depth >= maxDepth {
+		if len(refs) > 0 {
+			st.Capped = true
+		}
 		return n
 	}
-
-	for _, r := range childRefs(obj) {
+	// The node budget is enforced by the in-loop guard below rather than here, so
+	// a node arriving at the cap with no refs likewise does not flip Capped. The
+	// guard still breaks before any fetch, so the node count and the number of
+	// API calls are unchanged.
+	for _, r := range refs {
 		if st.Nodes >= maxNodes {
 			st.Capped = true
 			break

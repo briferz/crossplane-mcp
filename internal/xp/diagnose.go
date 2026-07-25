@@ -15,6 +15,17 @@ const maxSuspects = 10
 // annotation freezes reconciliation entirely, so it explains both a resource
 // that won't progress and one that won't finish deleting — and it is invisible
 // in conditions, which simply go stale.
+// unreachablePrefix labels a reason derived from a fetch failure rather than a
+// condition, so an agent can tell "this resource is broken" from "we could not
+// look at this resource".
+const unreachablePrefix = "unreachable: "
+
+// cappedCaveat is appended to any summary built from a truncated walk. Derived
+// from the traversal constants so the text cannot drift from the limits.
+func cappedCaveat() string {
+	return fmt.Sprintf("Traversal was capped at %d nodes / depth %d: some resources were not inspected, so this result is incomplete.", maxNodes, maxDepth)
+}
+
 const pausedReason = "paused: annotation crossplane.io/paused=true suspends reconciliation — " +
 	"the resource cannot progress or finish deleting until the annotation is removed"
 
@@ -48,7 +59,12 @@ type Suspect struct {
 	// agent can tell "unblock the finalizer" from "fix the create" and see how
 	// long it has been stuck.
 	DeletionTimestamp string `json:"deletionTimestamp,omitempty"`
-	Lifecycle         string `json:"lifecycle,omitempty"`
+	// Error is set when the walk could not inspect this resource at all — the
+	// kind would not resolve, or the Get was forbidden / NotFound / timed out.
+	// Such a suspect has no uid, conditions or events, so this is the only
+	// explanation there is. Mirrors Node.Error / FlatNode.Error.
+	Error     string `json:"error,omitempty"`
+	Lifecycle string `json:"lifecycle,omitempty"`
 	// Paused is true when the resource carries the crossplane.io/paused="true"
 	// annotation. A paused resource never reconciles — it cannot progress or
 	// finish deleting until the annotation is removed — and nothing in its
@@ -127,12 +143,18 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		return suspects[i].depth > suspects[j].depth
 	})
 
-	d := &Diagnosis{Healthy: len(suspects) == 0, Stats: stats}
+	// Healthy means "no suspect found AND the whole tree was inspected". A capped
+	// walk cannot support the second half, and the resources it never reached are
+	// exactly where an unexplained failure would hide. Same philosophy as
+	// Classify's "no health conditions at all -> we can't assert readiness".
+	d := &Diagnosis{Healthy: len(suspects) == 0 && !stats.Capped, Stats: stats}
 	if includeTree {
 		d.Tree = tree.Flatten()
 	}
 
-	if d.Healthy {
+	// Guarded on the suspect count, not d.Healthy: a capped-but-suspect-free tree
+	// is not healthy, and falling through would index suspects[0] and panic.
+	if len(suspects) == 0 {
 		// Don't claim readiness the server cannot assert: if some resources carry
 		// no health vocabulary, say how many rather than folding them into an
 		// "All N are Ready" that would be false.
@@ -142,6 +164,9 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 				stats.Nodes, unassessed)
 		} else {
 			d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
+		}
+		if stats.Capped {
+			d.Summary += " " + cappedCaveat()
 		}
 		return d
 	}
@@ -179,6 +204,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			DeletionTimestamp: n.deletionTime,
 			Lifecycle:         lifecycleLabel(n, nowFn()),
 			Paused:            n.paused,
+			Error:             n.Error,
 		}
 		if n.deletionTime != "" {
 			s.Finalizers = n.finalizers
@@ -197,8 +223,18 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		// window — and, when the condition is just a transport flake, lead the
 		// reasons (see reasonsWithEvent). Surface only a trimmed set to stay
 		// token-light.
-		condMsgs := blockingMessages(n.Conditions)
+		// leadFirst puts the first genuine condition ahead of any transport flake
+		// the controller happened to write first; decodeTFErrors is order-
+		// insensitive and attribute is idempotent under it.
+		condMsgs := leadFirst(blockingMessages(n.Conditions))
 		s.Reasons = reasonsWithEvent(condMsgs, events)
+		// A node the walk never fetched has no conditions and no events, so the
+		// fetch error is the only explanation that exists. Without this the
+		// suspect is a bare kind/name with empty reasons — and error nodes are
+		// often the deepest, so it is frequently named the root cause.
+		if n.Error != "" {
+			s.Reasons = append([]string{unreachablePrefix + n.Error}, s.Reasons...)
+		}
 		// A pause gates everything else in Reasons — no condition can change and
 		// no finalizer can run while it is set — so it always reads first.
 		if n.paused {
@@ -227,6 +263,11 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// event over a transport-flake condition; otherwise it returns the condition
 	// message, preserving the previous behaviour exactly.
 	msg, fromEvent := attribute(blockingMessages(root.Conditions), rootEvents)
+	// An unreachable root has no conditions and no events to attribute over, so
+	// without this the headline names a suspect and then explains nothing.
+	if msg == "" && root.Error != "" {
+		msg = unreachablePrefix + root.Error
+	}
 	if msg != "" {
 		d.Summary += " " + msg
 	}
@@ -234,6 +275,11 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// so the agent never misses the persistent failure behind the symptom.
 	if e, ok := qualifyingEvent(rootEvents); ok && !fromEvent {
 		d.Summary += fmt.Sprintf(" Recurring event: %s (x%d).", e.Reason, e.Count)
+	}
+	// The ranking above ran over a partial tree, so the named root cause may not
+	// be the real one — say so rather than presenting it with full confidence.
+	if stats.Capped {
+		d.Summary += " " + cappedCaveat()
 	}
 	return d
 }

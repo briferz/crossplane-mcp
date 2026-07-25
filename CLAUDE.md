@@ -170,5 +170,20 @@ See README "Releasing".
   absent, so a native object that does carry `Ready` still classifies on it.
   Without this, every native resource a v2 XR composes was a permanent suspect
   and frequently the named root cause.
+- **No signal drops at an output boundary** (each was silently lost before):
+  suspects carry `error` plus an `unreachable:` lead reason for nodes the walk
+  could not fetch (RBAC-forbidden / NotFound / unresolvable kind), so an error
+  node — often the deepest, hence frequently the named root cause — can no
+  longer be a bare kind/name with empty reasons. `Stats.Capped` now means
+  resources were *actually skipped*, not merely that a limit was reached (a
+  final leaf at `maxDepth` with no children skips nothing), and a capped
+  traversal both caveats the summary and forbids `healthy:true` — the ranking
+  ran over a partial tree. `attribute` leads with the first **non-noise**
+  condition, since `status.conditions` has no defined order; an all-noise
+  suspect keeps its lead, so provider-http/kubernetes "connection refused"
+  (where it IS the root cause) is unaffected. `list_unhealthy` rows carry
+  `deletionTimestamp` with a disjoint `summary.terminating` bucket, so a
+  resource whose reconciler died mid-teardown can no longer count as Ready and
+  vanish from triage.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

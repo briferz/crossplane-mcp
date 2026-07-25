@@ -43,6 +43,10 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 			"lifecycle label (Terminating (stuck Nd) / Creating (blocked, Nd) / Paused), decoded " +
 			"provider-terraform/OpenTofu error blobs (decodedErrors), a paused flag " +
 			"(crossplane.io/paused), and — while terminating — the finalizers holding deletion. " +
+			"A suspect the walk could not fetch at all (RBAC-forbidden, NotFound, unresolvable kind) " +
+			"carries error and leads its reasons with it. If the traversal hit its safety cap the " +
+			"summary says so and healthy is false: part of the tree was never inspected, so neither " +
+			"a clean bill of health nor the ranking can be trusted. " +
 			"Use this first when something is not becoming Ready.",
 	}, recorded(rec, "diagnose", diagnoseHandler(cl)))
 
@@ -72,7 +76,10 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 			"Lists composite resources (XRs) and claims and returns only those whose Ready/Synced condition " +
 			"is not True (by default), each as a tiny row {apiVersion, kind, name, namespace, category, " +
 			"state, ready, synced} (plus paused when crossplane.io/paused is set — a paused resource never " +
-			"reconciles) ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
+			"reconciles, and deletionTimestamp when it is being deleted — such rows are returned even " +
+			"when their conditions still say Ready, because a dead reconciler freezes them, and are " +
+			"counted in summary.terminating rather than ready/blocked/pending) " +
+			"ready to pass straight to diagnose. Use this FIRST to answer \"what is " +
 			"failing?\", then feed an item into diagnose for the root-cause tree, or get_resource for one " +
 			"resource's detail. Output is flat, capped, and ordered most-actionable first (Blocked before " +
 			"Pending), with no condition messages/events. Omitting namespace scans cluster-wide (needs " +
