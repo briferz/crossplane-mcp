@@ -90,7 +90,7 @@ jobs:
       # The apiserver/etcd tarball is ~60MB and version-pinned, so it is worth
       # caching; a miss just re-downloads rather than failing.
       - name: cache envtest binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bin/envtest
           key: envtest-${{ runner.os }}-1.36.2
