@@ -4,9 +4,22 @@ Runs `crossplane-mcp` against a **real kube-apiserver + etcd** — no kubelet, n
 controllers, no scheduler.
 
 ```sh
-make e2e-envtest     # resolves the apiserver/etcd binaries, then runs the suite
+make e2e-envtest     # tier 1: resolves apiserver/etcd binaries, runs the suite (~11s)
+make e2e-crossplane  # tier 2: needs a real cluster with Crossplane installed
 make e2e-vet         # compile-check only (also part of `make check`)
 ```
+
+Two tiers live in this one module, selected by environment rather than build
+tags — one `go vet`, and no tag combination that compiles in CI but not locally:
+
+| | Selected by | Runs |
+|---|---|---|
+| **envtest** | default (needs `KUBEBUILDER_ASSETS`) | every PR, ~11s |
+| **Crossplane** | `CROSSPLANE_E2E=1` + `KUBECONFIG` | weekly cron, `workflow_dispatch`, or an `e2e` PR label |
+
+Setting `CROSSPLANE_E2E=1` asserts a cluster exists; without one the tests fail
+rather than skip, because a silent skip is how a tier stops running and nobody
+notices.
 
 ## Why this is a separate Go module
 

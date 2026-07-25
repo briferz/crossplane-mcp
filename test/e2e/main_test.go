@@ -37,7 +37,40 @@ import (
 
 var testEnv *envtest.Environment
 
+// This module serves two tiers that never run together:
+//
+//	envtest   (default)          apiserver + etcd, no controllers. Fast, runs
+//	                             on every PR. Needs KUBEBUILDER_ASSETS.
+//	crossplane (CROSSPLANE_E2E)  a real kind cluster with real Crossplane,
+//	                             driven through KUBECONFIG. Cron/dispatch only.
+//
+// Selecting by environment rather than build tags keeps one module, one
+// `go vet`, and no tag combination that compiles in CI but not locally.
+func crossplaneTier() bool { return os.Getenv("CROSSPLANE_E2E") == "1" }
+
+// requireEnvtest skips a test when the process is running the Crossplane tier,
+// where there is no envtest apiserver.
+func requireEnvtest(t *testing.T) {
+	t.Helper()
+	if testEnv == nil {
+		t.Skip("envtest not started (CROSSPLANE_E2E tier)")
+	}
+}
+
+// requireCrossplane skips a test unless a real Crossplane cluster is available.
+func requireCrossplane(t *testing.T) {
+	t.Helper()
+	if !crossplaneTier() {
+		t.Skip("needs a real Crossplane cluster; set CROSSPLANE_E2E=1 with KUBECONFIG pointed at one")
+	}
+}
+
 func TestMain(m *testing.M) {
+	// The Crossplane tier brings its own cluster; envtest must not start.
+	if crossplaneTier() {
+		os.Exit(m.Run())
+	}
+
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		fmt.Fprintln(os.Stderr,
 			"KUBEBUILDER_ASSETS is unset — run via `make e2e-envtest`, which resolves the\n"+

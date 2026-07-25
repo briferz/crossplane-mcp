@@ -1,0 +1,13 @@
+# The v1 entry point: a namespaced Claim. Crossplane creates the cluster-scoped
+# XLegacyApp behind it and links them via spec.resourceRef.
+#
+# diagnose is pointed at this Claim, which exercises the walk step the v2
+# fixture cannot: Claim -> XR (spec.resourceRef) -> composed (spec.resourceRefs).
+---
+apiVersion: legacy.example.org/v1alpha1
+kind: LegacyAppClaim
+metadata:
+  name: legacy-demo
+  namespace: default
+spec:
+  message: "deliberately stuck, v1/LegacyCluster shape"

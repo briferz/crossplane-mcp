@@ -1,0 +1,72 @@
+# The v1 / LegacyCluster half of the fixture: a CLUSTER-SCOPED XR reached
+# through a namespaced Claim, with composed refs at the top-level
+# spec.resourceRefs.
+#
+# This exists because CLAUDE.md hard rule 2 requires both Crossplane shapes and
+# the v2-only fixture could not cover the other one. Crossplane 2.x still serves
+# scope: LegacyCluster, so ONE cluster yields both trees — which is why this is
+# a second XRD rather than a second cluster or a version matrix.
+#
+# Shape difference that matters to the walker:
+#   v2 namespaced XR -> spec.crossplane.resourceRefs
+#   v1 LegacyCluster -> spec.resourceRefs, plus a Claim pointing at the XR via
+#                       spec.resourceRef
+---
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xlegacyapps.legacy.example.org
+spec:
+  # LegacyCluster: cluster-scoped XR + a namespaced Claim, the v1 arrangement.
+  scope: LegacyCluster
+  group: legacy.example.org
+  names:
+    kind: XLegacyApp
+    plural: xlegacyapps
+  claimNames:
+    kind: LegacyAppClaim
+    plural: legacyappclaims
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                message:
+                  type: string
+---
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xlegacyapps.legacy.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: legacy.example.org/v1alpha1
+    kind: XLegacyApp
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: stuck-nop
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: NopResource
+              spec:
+                forProvider:
+                  # Same signature failure as the v2 fixture: reconciles
+                  # (Synced=True) but never becomes Ready, so the deepest
+                  # non-Ready node is the composed resource, not the XR.
+                  conditionAfter:
+                    - time: 0s
+                      conditionType: Ready
+                      conditionStatus: "False"
