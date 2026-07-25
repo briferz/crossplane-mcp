@@ -60,11 +60,12 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 
 	var items []UnhealthyItem
 	for i := range listed {
-		obj := &listed[i].Object
+		item := &listed[i]
+		obj := &item.Object
 		if kindFilter != "" && strings.ToLower(obj.GetKind()) != kindFilter {
 			continue
 		}
-		health, state := Classify(Conditions(obj))
+		health, state := Classify(obj.GetAPIVersion(), Conditions(obj))
 		res.Scanned++
 		switch state {
 		case StateBlocked:
@@ -72,9 +73,15 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 		case StatePending:
 			res.Summary.Pending++
 		default:
+			// Ready, plus StateUnknown — not-failing either way.
 			res.Summary.Ready++
 		}
-		if state == StateReady && !p.IncludeHealthy {
+		// Hide StateUnknown alongside Ready: it is "not assessed", not a problem
+		// to triage. Defensive rather than load-bearing — list_unhealthy's
+		// discovery is category-scoped (composite/claim/managed) and native types
+		// are never stamped with those Crossplane categories, so this is currently
+		// unreachable here.
+		if (state == StateReady || state == StateUnknown) && !p.IncludeHealthy {
 			continue
 		}
 		items = append(items, UnhealthyItem{
@@ -82,7 +89,7 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 			Kind:       obj.GetKind(),
 			Name:       obj.GetName(),
 			Namespace:  obj.GetNamespace(),
-			Category:   listed[i].Category,
+			Category:   item.Category,
 			State:      state,
 			Ready:      health.Ready,
 			Synced:     health.Synced,

@@ -45,6 +45,13 @@ func lifecycleLabelFor(n *Node, now time.Time, comingUp string) string {
 			return "Terminating (" + humanizeAge(d) + ")"
 		}
 	}
+	// Not deleting and not assessable: a native resource has no coming-up story
+	// to tell. "Creating (pending, 340d)" on a ConfigMap that has been healthy
+	// for a year is nonsense. Checked after the deletion branch on purpose — a
+	// terminating native resource still earns its "Terminating (stuck Nd)".
+	if n.State == StateUnknown {
+		return ""
+	}
 	// Not deleting: a Ready node has no "Creating" story (it isn't a suspect
 	// today — unless paused, which is worth naming since its conditions may be
 	// stale), and a node that only failed to resolve/fetch lets its Error field

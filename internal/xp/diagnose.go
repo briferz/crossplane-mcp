@@ -95,9 +95,19 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// reported as healthy. Also collect any resource being deleted even if its
 	// conditions still report Ready — a finalizer can wedge a teardown while the
 	// Ready condition lags, and a stuck termination must never be called healthy.
+	// StateUnknown nodes are excluded: a native Kubernetes resource composed by a
+	// v2 XR carries none of Ready/Synced/Healthy, so treating its silence as
+	// "pending" made every such resource a permanent suspect with empty reasons —
+	// and, being typically the deepest node, frequently the named root cause. A
+	// terminating one is still collected: a wedged teardown is real regardless of
+	// which condition vocabulary the object speaks.
 	var suspects []*Node
+	var unassessed int
 	walk(tree, func(n *Node) {
-		if n.State != StateReady || n.deletionTime != "" {
+		if n.State == StateUnknown {
+			unassessed++
+		}
+		if (n.State != StateReady && n.State != StateUnknown) || n.deletionTime != "" {
 			suspects = append(suspects, n)
 		}
 	})
@@ -121,7 +131,16 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	}
 
 	if d.Healthy {
-		d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
+		// Don't claim readiness the server cannot assert: if some resources carry
+		// no health vocabulary, say how many rather than folding them into an
+		// "All N are Ready" that would be false.
+		if unassessed > 0 {
+			d.Summary = fmt.Sprintf(
+				"No blocking or pending conditions found across %d resource(s); %d of them report no Crossplane health conditions (native Kubernetes resources) and were not assessed for readiness.",
+				stats.Nodes, unassessed)
+		} else {
+			d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
+		}
 		return d
 	}
 
@@ -228,7 +247,9 @@ func rankTier(n *Node) int {
 		return 0
 	case StatePending:
 		return 1
-	default: // StateReady — only collected because it is being deleted
+	default: // StateReady or StateUnknown — only collected because it is being
+		// deleted, so it has no failing condition to explain and must never
+		// displace a genuine Blocked/Pending root cause.
 		return 2
 	}
 }

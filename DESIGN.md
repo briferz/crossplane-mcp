@@ -106,6 +106,16 @@ The tree-walker must:
   `list_configurations` tools — note `Classify` deliberately ignores
   `Installed`, packages use their own fold-over-all-conditions classifier).
 
+`Classify` also returns a fourth state, `Unknown`, for objects in built-in
+Kubernetes API groups that carry none of `Ready`/`Synced`/`Healthy` — the
+ConfigMaps, Services and Deployments a v2 XR composes directly. They are not
+diagnose suspects, get no lifecycle label, and are excluded from the "all
+Ready" claim (the summary states how many were not assessed). The API group is
+consulted *only* when the vocabulary is absent, so a native object that does
+carry `Ready` still classifies on it; and a conditions-less resource in a
+provider or XRD group stays `Pending`, because a freshly-created managed
+resource must never read as healthy.
+
 ---
 
 ## 4. Architecture

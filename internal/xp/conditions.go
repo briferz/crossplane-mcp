@@ -4,6 +4,8 @@
 package xp
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -30,6 +32,12 @@ const (
 	StateReady   = "Ready"   // all present health conditions are True
 	StatePending = "Pending" // some condition is Unknown/absent but none False
 	StateBlocked = "Blocked" // a health condition is False
+	// StateUnknown: the object does not speak Crossplane's health vocabulary at
+	// all — a native Kubernetes resource composed by a v2 XR (ConfigMap, Service,
+	// PVC; or a Deployment, whose vocabulary is Available/Progressing). Its
+	// readiness is not knowable from Ready/Synced/Healthy, so it is neither Ready
+	// nor a failure: "not assessed", not "fine".
+	StateUnknown = "Unknown"
 )
 
 // Conditions extracts the status conditions from an unstructured object.
@@ -77,7 +85,14 @@ type Health struct {
 }
 
 // Classify reduces a condition set to a Health summary and an overall state.
-func Classify(cs []Condition) (Health, string) {
+//
+// apiVersion is consulted ONLY in the no-vocabulary branch — when none of
+// Ready/Synced/Healthy is present at all — to tell a native Kubernetes resource
+// (which will never carry them) from a Crossplane resource that has not reported
+// them yet. Anything that does carry the vocabulary classifies on its conditions
+// alone, whatever its group. An empty apiVersion means unknown provenance and
+// stays conservatively Pending.
+func Classify(apiVersion string, cs []Condition) (Health, string) {
 	h := Health{
 		Ready:   byType(cs, TypeReady),
 		Synced:  byType(cs, TypeSynced),
@@ -97,11 +112,42 @@ func Classify(cs []Condition) (Health, string) {
 			sawTrue = true
 		}
 	}
-	// No health conditions at all → we can't assert readiness.
+	// No health conditions at all → we can't assert readiness. Whether that means
+	// "not yet" or "never will" depends on what kind of object this is.
 	if !sawTrue && state == StateReady {
+		if nativeAPIGroup(apiVersion) {
+			return h, StateUnknown
+		}
 		return h, StatePending
 	}
 	return h, state
+}
+
+// builtinGroups are the non-core Kubernetes API groups that do not end in
+// ".k8s.io". Every other built-in group is either the core group ("") or carries
+// that suffix, which Kubernetes reserves — so this short exact-match list plus
+// the suffix check covers the built-ins without a prefix rule that would swallow
+// look-alike third-party groups.
+var builtinGroups = map[string]bool{
+	"apps":        true,
+	"batch":       true,
+	"autoscaling": true,
+	"policy":      true,
+	"extensions":  true,
+}
+
+// nativeAPIGroup reports whether apiVersion names a built-in Kubernetes API
+// group — an object that will never carry Crossplane's health conditions.
+//
+// Matching is exact for the listed groups and suffix-based for ".k8s.io", both
+// deliberately: "apps.example.org" is a provider group, not the "apps" built-in,
+// and the leading dot in the suffix keeps "cluster.x-k8s.io" out.
+func nativeAPIGroup(apiVersion string) bool {
+	if apiVersion == "" {
+		return false
+	}
+	g := groupOf(apiVersion)
+	return g == "" || builtinGroups[g] || strings.HasSuffix(g, ".k8s.io")
 }
 
 // blockingMessages returns the reason/message text of any condition that is

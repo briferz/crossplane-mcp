@@ -172,7 +172,7 @@ func metaTimeString(t metav1.Time) string {
 
 func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, depth int, visited map[string]bool, st *Stats) *Node {
 	conds := Conditions(obj)
-	health, state := Classify(conds)
+	health, state := Classify(obj.GetAPIVersion(), conds)
 	n := &Node{
 		APIVersion:   obj.GetAPIVersion(),
 		Kind:         obj.GetKind(),
