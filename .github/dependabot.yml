@@ -9,6 +9,17 @@ updates:
         patterns:
           - "*"
 
+  # The integration harness is a separate module; without its own entry it
+  # would never receive updates (controller-runtime, envtest).
+  - package-ecosystem: gomod
+    directory: "/test/e2e"
+    schedule:
+      interval: weekly
+    groups:
+      e2e-dependencies:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

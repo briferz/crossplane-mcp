@@ -24,12 +24,26 @@ resource first, and returns full condition messages + events. See
 ## Build / test / checks
 
 ```sh
-make build      # bin/crossplane-mcp
-make test       # go test -race + coverage (no cluster needed)
-make lint       # golangci-lint
-make vulncheck  # govulncheck
-make check      # fmt-check + vet + lint + test + vulncheck (mirrors CI)
+make build        # bin/crossplane-mcp
+make test         # go test -race + coverage (no cluster needed)
+make lint         # golangci-lint
+make vulncheck    # govulncheck
+make e2e-envtest  # integration suite vs a real kube-apiserver (test/e2e)
+make check        # fmt-check + vet + lint + test + e2e-vet + vulncheck (mirrors CI)
 ```
+
+**Test tiers.** Unit tests (`make test`) use fakes and need no cluster.
+`test/e2e` is a **nested Go module** running against a real kube-apiserver +
+etcd via envtest — covering what fakes structurally cannot: discovery
+cache invalidation, the `involvedObject.uid` field selector (`dynamicfake`
+ignores field selectors entirely), discovery categories over the real wire, and
+both v1/v2 ref shapes. It is a separate module on purpose, and that is
+load-bearing: a `//go:build` tag would still pull `controller-runtime` into the
+**shipped** `go.mod` and `govulncheck`'s surface (`go mod tidy` resolves imports
+in tagged files), and the harness *must* write while the server must not — the
+module boundary is what lets the `forbidigo` read-only rule keep its exact
+semantics with **no exclusion and no `//nolint`**. Keep `ENVTEST_K8S_VERSION` in
+step with the `client-go` minor. See `test/e2e/README.md`.
 
 - **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`**.
   A prebuilt golangci-lint binary built with an older Go *refuses* this module

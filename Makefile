@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 IMAGE ?= ghcr.io/briferz/crossplane-mcp
 
-.PHONY: build test vet fmt fmt-check lint vulncheck check docker clean
+.PHONY: build test vet fmt fmt-check lint vulncheck check docker clean e2e-vet e2e-envtest
 
 build:
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) $(PKG)
@@ -27,8 +27,26 @@ lint:
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+# The integration suite lives in a nested module (test/e2e) so controller-runtime
+# stays out of the shipped go.mod and out of govulncheck's surface, and so the
+# harness's writes are never scanned by the read-only forbidigo rule.
+ENVTEST_K8S_VERSION ?= 1.36.2
+SETUP_ENVTEST := sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
+
+# Compile-check the nested module so it cannot silently rot when the main
+# module's internals change. Part of `check` because it costs ~a second and a
+# broken harness is invisible until someone runs the slow target.
+e2e-vet:
+	go -C test/e2e vet ./...
+
+# Real kube-apiserver + etcd, no controllers. Covers what fakes structurally
+# cannot: discovery caching/invalidation, field selectors, RBAC, HTTP/2.
+e2e-envtest:
+	@KUBEBUILDER_ASSETS="$$(go run $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(CURDIR)/bin/envtest -p path)" \
+		go -C test/e2e test ./... -timeout 10m
+
 # Mirror the CI gates locally.
-check: fmt-check vet lint test vulncheck
+check: fmt-check vet lint test e2e-vet vulncheck
 
 docker:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
