@@ -197,5 +197,19 @@ See README "Releasing".
   set explicitly (`--request-timeout`, default 30s, `0` disables); note it is a
   per-request deadline on the shared config, so a future genuine Watch would
   need its own config with `Timeout` unset.
+- **`ListAll` projects at ingestion** (`internal/k8s/list.go`): every page used to
+  accumulate whole objects — `managedFields` and
+  `kubectl.kubernetes.io/last-applied-configuration` included — before any
+  display cap applied, so `list_unhealthy{category:"managed"}` on a large estate
+  could OOM the stdio process mid-call. `ProjectTriageFields` trims each object
+  as it arrives (rebuilding the map, not deleting keys, so the bulk is actually
+  released); the packages path passes `nil` because `BuildPackages` reads far
+  more. **The projector hardcodes `BuildUnhealthy`'s read-set and cannot live in
+  `xp` (import cycle) — `TestBuildUnhealthyProjectionParity` is the pin.** Add a
+  field to `BuildUnhealthy`'s reads without adding it to the projector and every
+  row silently loses it; nothing else in the suite notices. Paging deliberately
+  runs to completion rather than stopping at the caller's limit: the pre-cap
+  `Scanned`/`Summary` totals and the global Blocked-before-Pending ordering both
+  need the whole set.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

@@ -172,7 +172,7 @@ func listUnhealthyHandler(cl *k8s.Client) mcp.ToolHandlerFor[ListUnhealthyInput,
 				" (is Crossplane installed, and do you have discovery access?)")
 		}
 
-		res := cl.ListAll(ctx, kinds, strings.TrimSpace(in.Namespace))
+		res := cl.ListAll(ctx, kinds, strings.TrimSpace(in.Namespace), k8s.ProjectTriageFields)
 		built := xp.BuildUnhealthy(res.Objects, xp.UnhealthyParams{
 			Kind:           in.Kind,
 			IncludeHealthy: in.IncludeHealthy,

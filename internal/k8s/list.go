@@ -16,9 +16,12 @@ import (
 // listChunkSize bounds each List request, matching kubectl's default
 // --chunk-size. A single unbounded List of a large resource type can spike the
 // API server / etcd; chunking with a Continue token keeps the cluster (which we
-// may be pointed at in production) safe. Note this caps per-request size, not
-// the server's total in-memory result — that is bounded in practice by the
-// composite+claim default scope and the response cap.
+// may be pointed at in production) safe.
+//
+// This caps per-request size only — every page still accumulates in memory
+// before any display cap applies, and the category=managed scope removes any
+// practical bound on how many objects that is. ProjectTriageFields is what
+// keeps the accumulation small; see its comment.
 const listChunkSize = 500
 
 // Crossplane stamps XRD-generated CRDs with these Kubernetes discovery
@@ -140,7 +143,61 @@ func matchCategory(have, want []string) string {
 // privilege role still gets whatever it can read.
 //
 // Read-only: issues only dynamic List requests.
-func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace string) ListResult {
+// ProjectTriageFields trims a listed object down to the fields triage reads,
+// replacing its map rather than deleting keys so the discarded bulk is actually
+// released. Listing cluster-wide retains every object before any cap applies, and
+// the bulk of a managed resource is managedFields plus
+// kubectl.kubernetes.io/last-applied-configuration — none of which triage looks
+// at. Without this, list_unhealthy{category:"managed"} on a large estate holds
+// the whole result set in memory at once.
+//
+// COUPLING, deliberate and narrow: this is the read-set of xp.BuildUnhealthy.
+// It cannot live in xp (that package imports this one), so parity is pinned by
+// TestBuildUnhealthyProjectionParity, which runs BuildUnhealthy over projected
+// and unprojected copies of the same fixtures and requires identical results.
+// If you add a field to BuildUnhealthy's reads, that test fails here.
+func ProjectTriageFields(o *unstructured.Unstructured) {
+	src := o.Object
+	dst := make(map[string]any, 4)
+	for _, k := range []string{"apiVersion", "kind"} {
+		if v, ok := src[k]; ok {
+			dst[k] = v
+		}
+	}
+	if md, ok := src["metadata"].(map[string]any); ok {
+		m := make(map[string]any, 4)
+		for _, k := range []string{"name", "namespace", "deletionTimestamp"} {
+			if v, ok := md[k]; ok {
+				m[k] = v
+			}
+		}
+		// Only the pause annotation, never the whole map: last-applied-
+		// configuration alone can rival the object it annotates.
+		if ann, ok := md["annotations"].(map[string]any); ok {
+			if v, ok := ann[PausedAnnotation]; ok {
+				m["annotations"] = map[string]any{PausedAnnotation: v}
+			}
+		}
+		dst["metadata"] = m
+	}
+	if st, ok := src["status"].(map[string]any); ok {
+		if c, ok := st["conditions"]; ok {
+			dst["status"] = map[string]any{"conditions": c}
+		}
+	}
+	o.Object = dst
+}
+
+// PausedAnnotation suspends reconciliation when set to "true". Mirrored here
+// because ProjectTriageFields must retain it; xp.IsPaused is the reader.
+const PausedAnnotation = "crossplane.io/paused"
+
+// ListAll pages every kind into memory. project, when non-nil, trims each object
+// as it arrives — see ProjectTriageFields. Paging deliberately runs to
+// completion rather than stopping at the caller's display limit: the pre-cap
+// Scanned/Summary totals and the global Blocked-before-Pending ordering both
+// require seeing everything.
+func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace string, project func(*unstructured.Unstructured)) ListResult {
 	var res ListResult
 	for _, k := range kinds {
 		// Stop promptly if the caller's context is done (client gone / timeout)
@@ -171,7 +228,11 @@ func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace s
 				break
 			}
 			for i := range list.Items {
-				res.Objects = append(res.Objects, Listed{Category: k.Category, Object: list.Items[i]})
+				o := list.Items[i]
+				if project != nil {
+					project(&o)
+				}
+				res.Objects = append(res.Objects, Listed{Category: k.Category, Object: o})
 			}
 			if cont = list.GetContinue(); cont == "" {
 				break

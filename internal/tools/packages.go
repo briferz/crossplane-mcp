@@ -60,8 +60,8 @@ func listPackagesHandler(cl *k8s.Client, pkgKind, revKind string) mcp.ToolHandle
 		// Packages and revisions are listed separately so an RBAC denial on one
 		// is distinguishable from the other: package rows still ship when only
 		// revisions are forbidden, with revision-derived fields suppressed.
-		pkgRes := cl.ListAll(ctx, pkgKinds, "")
-		revRes := cl.ListAll(ctx, revKinds, "")
+		pkgRes := cl.ListAll(ctx, pkgKinds, "", nil)
+		revRes := cl.ListAll(ctx, revKinds, "", nil)
 		notes = append(notes, pkgRes.Notes...)
 		notes = append(notes, revRes.Notes...)
 
