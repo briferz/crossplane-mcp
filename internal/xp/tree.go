@@ -152,7 +152,10 @@ func groupOf(apiVersion string) string {
 // pausedAnnotation suspends a resource's reconciliation when set to "true" —
 // the standard Crossplane pause switch, honoured by crossplane-runtime managed
 // reconcilers and the composite/claim controllers alike.
-const pausedAnnotation = "crossplane.io/paused"
+//
+// Aliased rather than redeclared: k8s.ProjectTriageFields must retain this exact
+// key when trimming listed objects, so the two cannot be allowed to drift.
+const pausedAnnotation = k8s.PausedAnnotation
 
 // IsPaused reports whether the resource carries the Crossplane pause
 // annotation. A paused resource never reconciles: its conditions go stale and

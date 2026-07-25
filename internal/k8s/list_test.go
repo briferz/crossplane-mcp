@@ -187,7 +187,7 @@ func listFixture(t *testing.T) (*Client, []CompositeKind) {
 
 func TestListAllClusterWide(t *testing.T) {
 	cl, kinds := listFixture(t)
-	res := cl.ListAll(context.Background(), kinds, "")
+	res := cl.ListAll(context.Background(), kinds, "", nil)
 	if len(res.Objects) != 3 {
 		t.Fatalf("cluster-wide scan should list all 3 objects, got %d (notes %v)", len(res.Objects), res.Notes)
 	}
@@ -198,7 +198,7 @@ func TestListAllClusterWide(t *testing.T) {
 
 func TestListAllNamespaceScopedSkipsClusterScoped(t *testing.T) {
 	cl, kinds := listFixture(t)
-	res := cl.ListAll(context.Background(), kinds, "team-a")
+	res := cl.ListAll(context.Background(), kinds, "team-a", nil)
 	// Only the team-a XApp; the team-b claim is elsewhere; the cluster-scoped
 	// XCluster is skipped with a note.
 	if len(res.Objects) != 1 || res.Objects[0].Object.GetName() != "app1" {
@@ -215,7 +215,7 @@ func TestListAllForbiddenDegradesGracefully(t *testing.T) {
 	dyn.PrependReactor("list", "appclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps.example.org", Resource: "appclaims"}, "", errors.New("rbac"))
 	})
-	res := cl.ListAll(context.Background(), kinds, "")
+	res := cl.ListAll(context.Background(), kinds, "", nil)
 	// The forbidden type is skipped with a note; the others still list. No panic,
 	// no propagated error (ListAll has no error return — that IS the contract).
 	if len(res.Objects) != 2 {
@@ -236,7 +236,7 @@ func TestListAllSkipNotes(t *testing.T) {
 		cl.Dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "xapps", func(clienttesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewNotFound(forbidGVR, "")
 		})
-		res := cl.ListAll(context.Background(), kinds, "")
+		res := cl.ListAll(context.Background(), kinds, "", nil)
 		if !hasNote(res.Notes, "not found") {
 			t.Errorf("expected a not-found note, got %v", res.Notes)
 		}
@@ -247,7 +247,7 @@ func TestListAllSkipNotes(t *testing.T) {
 		cl.Dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "xapps", func(clienttesting.Action) (bool, runtime.Object, error) {
 			return true, nil, errors.New("boom")
 		})
-		res := cl.ListAll(context.Background(), kinds, "")
+		res := cl.ListAll(context.Background(), kinds, "", nil)
 		if !hasNote(res.Notes, "boom") {
 			t.Errorf("expected a generic-error note, got %v", res.Notes)
 		}
@@ -258,7 +258,7 @@ func TestListAllSkipNotes(t *testing.T) {
 		cl.Dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "xapps", func(clienttesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewForbidden(forbidGVR, "", errors.New("rbac"))
 		})
-		res := cl.ListAll(context.Background(), kinds, "team-a")
+		res := cl.ListAll(context.Background(), kinds, "team-a", nil)
 		// A namespace was given, so the note must NOT suggest re-calling with one.
 		if !hasNote(res.Notes, "in team-a") || hasNote(res.Notes, "re-call with an explicit namespace") {
 			t.Errorf("forbidden-in-namespace note should name the namespace and omit the hint, got %v", res.Notes)
@@ -280,7 +280,7 @@ func TestListAllPaginates(t *testing.T) {
 		return true, l, nil
 	})
 
-	res := cl.ListAll(context.Background(), kinds, "")
+	res := cl.ListAll(context.Background(), kinds, "", nil)
 	if calls != 2 {
 		t.Errorf("expected ListAll to follow the Continue token (2 calls for xapps), got %d", calls)
 	}
@@ -300,7 +300,7 @@ func TestListAllAbortsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already done before the first List
 
-	res := cl.ListAll(ctx, kinds, "")
+	res := cl.ListAll(ctx, kinds, "", nil)
 	if len(res.Objects) != 0 {
 		t.Errorf("expected no objects when the context is cancelled, got %d", len(res.Objects))
 	}
