@@ -80,3 +80,50 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
+  # The weekly cron above is the tripwire for a CVE disclosed while the repo is
+  # quiet — it worked, finding a reachable x/text advisory. Nobody was told, so
+  # main sat red for 11 days with PRs stuck behind it. Detection was never the
+  # gap; notification was.
+  #
+  # Scheduled runs only: a push/PR failure already has someone watching it, and
+  # GitHub's own notifications for cron runs go to whoever last touched the
+  # workflow file, which is nobody in particular.
+  notify-scheduled-failure:
+    name: notify on scheduled failure
+    needs: [build-test, lint, govulncheck]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: "Scheduled CI is failing on main"
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n' \
+            "The weekly scheduled CI run failed on \`main\`." \
+            "" \
+            "Run: ${RUN_URL}" \
+            "" \
+            "This job only fires for \`schedule\` events. The most likely cause is a" \
+            "newly disclosed vulnerability reaching \`govulncheck\` — the reason the" \
+            "cron exists — rather than anything a commit changed." \
+            "" \
+            "This issue is reused rather than reopened weekly; it will keep collecting" \
+            "comments until the run goes green and someone closes it.")
+          # Match on title rather than a label so the workflow carries no
+          # dependency on repo labels existing.
+          existing=$(gh issue list --state open --json number,title \
+            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
+          if [ -n "${existing}" ]; then
+            echo "commenting on existing issue #${existing}"
+            gh issue comment "${existing}" --body "${body}"
+          else
+            echo "opening a new tracking issue"
+            gh issue create --title "${TITLE}" --body "${body}"
+          fi
