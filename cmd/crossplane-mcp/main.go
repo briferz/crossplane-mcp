@@ -31,7 +31,7 @@ Recommended workflow:
 4. list_providers / list_functions / list_configurations — when a diagnose suspect carries a cryptic provider/function error, or a managed resource never syncs: check whether the package behind it is unhealthy — full condition messages, the failing revision (for providers and functions its name is by default its runtime Deployment's name), pull-error events, and upgrade skew (failed unpack, awaiting manual approval).
 Use list_contexts to see the available kubeconfig contexts (the server is pinned to one context per process).
 
-Every tool is read-only: only Kubernetes get/list requests are issued, nothing is ever mutated, and Secret values are never read.`
+Every tool is read-only: only Kubernetes get/list requests are issued and nothing is ever mutated. Responses are closed projections built from a resource's metadata, spec, status and events — never the raw object. A Secret keeps its data/stringData at top level, outside all of those, so Secret values are never returned (a Secret composed by an XR is fetched like any other tree node; only its contents are withheld).`
 
 func main() {
 	var (

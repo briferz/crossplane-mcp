@@ -9,3 +9,32 @@ linters:
     - unconvert
     - gosec
     - bodyclose
+    - forbidigo
+  settings:
+    forbidigo:
+      # Match the type-checked identity of the call rather than the source text:
+      # a plain regex would fire on strings.Replace / gzip.NewReader and would
+      # miss a write issued through a stored interface variable.
+      analyze-types: true
+      forbid:
+        # The read-only invariant (CLAUDE.md hard rule 1), mechanically enforced.
+        # Both interfaces are listed on purpose: Resource(gvr).Create resolves to
+        # NamespaceableResourceInterface while Resource(gvr).Namespace(ns).Create
+        # resolves to ResourceInterface, so dropping the alternation would
+        # silently miss the cluster-scoped form.
+        #
+        # Scope, honestly: this covers writes through k8s.io/client-go/dynamic
+        # only. A typed clientset, a raw rest.Client, or a call routed through a
+        # locally-declared wrapper interface (which gives the call the local
+        # type's identity) would not be caught. Nothing here does any of those,
+        # and TestHandlersIssueOnlyReadVerbs is the backstop for anything routed
+        # through Client.Dyn -- the only cluster handle that exists today.
+        #
+        # Re-verify after a client-go bump. This is a DENYLIST of the eight write
+        # methods, so it fails open twice: a renamed or relocated interface stops
+        # matching silently, and a newly added write method is not covered at
+        # all. An allowlist inversion (anything but Get/List/Watch) is not
+        # expressible -- forbidigo uses RE2, which has no lookahead.
+        - pattern: '^dynamic\.(Namespaceable)?ResourceInterface\.(Create|Update|UpdateStatus|Delete|DeleteCollection|Patch|Apply|ApplyStatus)$'
+          pkg: '^k8s\.io/client-go/dynamic$'
+          msg: "crossplane-mcp is read-only: only get/list/watch may ever be issued against the cluster (CLAUDE.md hard rule 1)."

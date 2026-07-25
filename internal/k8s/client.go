@@ -26,6 +26,14 @@ import (
 
 // Client holds the read-only handles used by the diagnostic tools.
 type Client struct {
+	// Dyn is write-capable by type — client-go ships no read-only variant — but
+	// the read-only invariant is enforced mechanically, not by convention: the
+	// forbidigo rule in .golangci.yml fails the lint gate on any Create/Update/
+	// Delete/Patch/Apply issued through it, and TestHandlersIssueOnlyReadVerbs
+	// asserts the tool handlers record only get/list actions here. It stays
+	// exported because tests in other packages inject a fake. A write through
+	// some future second client would escape both checks — keep this the only
+	// cluster-mutating-capable handle.
 	Dyn    dynamic.Interface
 	Disco  discovery.DiscoveryInterface
 	Mapper meta.RESTMapper
