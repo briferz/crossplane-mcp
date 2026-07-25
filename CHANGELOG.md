@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/briferz/crossplane-mcp/compare/v0.6.0...v0.7.0) (2026-07-25)
+
+
+### Features
+
+* **k8s:** invalidate stale discovery, bound requests, cover Get's scope branch ([#49](https://github.com/briferz/crossplane-mcp/issues/49)) ([8de4f5d](https://github.com/briferz/crossplane-mcp/commit/8de4f5d2eeb30c6f5672a3385d1350c3e911680a))
+* **xp:** surface signals that drop at output boundaries ([#48](https://github.com/briferz/crossplane-mcp/issues/48)) ([02ae034](https://github.com/briferz/crossplane-mcp/commit/02ae0348c5e27e23d8fd4ed670864d6010bef91c))
+
+
+### Bug Fixes
+
+* **deps:** resolve reachable x/text CVE and refresh dependencies ([#43](https://github.com/briferz/crossplane-mcp/issues/43)) ([c577985](https://github.com/briferz/crossplane-mcp/commit/c5779853669e2c8ae02ff2ffaacd9794c9f0936b))
+* **k8s:** project listed objects to triage fields in ListAll ([#50](https://github.com/briferz/crossplane-mcp/issues/50)) ([bc05b3e](https://github.com/briferz/crossplane-mcp/commit/bc05b3e193ffae86d35d14afac3e15e7ed44ce53))
+* **record:** mask the value sibling when name/key names a secret ([#51](https://github.com/briferz/crossplane-mcp/issues/51)) ([d88279b](https://github.com/briferz/crossplane-mcp/commit/d88279b8be7ec08539aada247fee0e4ff9fe8bfc))
+* **safety:** enforce the read-only and no-Secret-contents promises ([#47](https://github.com/briferz/crossplane-mcp/issues/47)) ([7654959](https://github.com/briferz/crossplane-mcp/commit/765495946c437afde7fa8f6c12a1ea8db767a070))
+* **xp:** classify vocabulary-less native resources as Unknown ([#46](https://github.com/briferz/crossplane-mcp/issues/46)) ([fed2a8f](https://github.com/briferz/crossplane-mcp/commit/fed2a8f6aea3e7f3bbf78977a3d8c7a37de6ae1b))
+
 ## [0.6.0](https://github.com/briferz/crossplane-mcp/compare/v0.5.0...v0.6.0) (2026-06-12)
 
 
