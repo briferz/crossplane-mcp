@@ -12,7 +12,13 @@
 #   v1 LegacyCluster -> spec.resourceRefs, plus a Claim pointing at the XR via
 #                       spec.resourceRef
 ---
-apiVersion: apiextensions.crossplane.io/v2
+# NOTE the API version: `scope: LegacyCluster` and `claimNames` exist ONLY on
+# apiextensions.crossplane.io/v1. The v2 XRD API narrowed scope to
+# Namespaced;Cluster and dropped claims entirely — verified against
+# crossplane v2.3.4 (apis/apiextensions/{v1,v2}/xrd_types.go), after a first
+# attempt on v2 was rejected by the apiserver with
+# `Unsupported value: "LegacyCluster"`.
+apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
   name: xlegacyapps.legacy.example.org

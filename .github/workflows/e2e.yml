@@ -91,6 +91,10 @@ jobs:
           set -euo pipefail
           kubectl apply -f test/e2e/manifests/10-platform-v2.yaml
           kubectl apply -f test/e2e/manifests/11-platform-v1.yaml
+          # Surface what actually got created before waiting on it: a partially
+          # applied multi-doc file (one object rejected, the rest accepted) is
+          # otherwise only visible as a downstream wait timeout.
+          kubectl get xrd -o custom-columns=NAME:.metadata.name,SCOPE:.spec.scope
           # XRDs must be Established before their instances can be created.
           kubectl wait --for=condition=Established xrd/xstuckapps.example.org --timeout=180s
           kubectl wait --for=condition=Established xrd/xlegacyapps.legacy.example.org --timeout=180s
