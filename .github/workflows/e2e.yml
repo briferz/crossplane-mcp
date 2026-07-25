@@ -1,0 +1,172 @@
+name: E2E (kind + Crossplane)
+
+# The full-fidelity tier: a real kind cluster running real Crossplane, so the
+# assertions can catch what nothing else can — that upstream still writes
+# composed refs where the walker looks. The envtest tier's CRDs only MIMIC
+# XRD-generated ones, so it would keep passing if that shape changed.
+#
+# DELIBERATELY NOT A REQUIRED CHECK, and it should stay that way. Three external
+# registries sit on its critical path (kindest/node, the Crossplane chart,
+# xpkg.crossplane.io), none of them ours. As a required check it would block
+# Dependabot and release-please PRs harder than a human's, since those cannot be
+# re-run by hand as easily.
+on:
+  schedule:
+    # Monday 07:00 UTC — an hour after ci.yml's cron, so a red result here is
+    # attributable to this workflow rather than racing the other one.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      crossplane_version:
+        description: "Crossplane chart version (empty = chart default)"
+        required: false
+        default: ""
+  pull_request:
+    # Opt-in per PR by applying the `e2e` label — for changes that touch the
+    # walker, discovery, or the RBAC manifest, where a week-late cron signal is
+    # too late to be useful.
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    name: kind + Crossplane
+    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'e2e' }}
+    runs-on: ubuntu-latest
+    # Generous but bounded: a hung package install should fail, not burn an hour.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: create cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: xpmcp-e2e
+          wait: 120s
+
+      - name: install Crossplane
+        env:
+          CHART_VERSION: ${{ inputs.crossplane_version }}
+        run: |
+          set -euo pipefail
+          helm repo add crossplane-stable https://charts.crossplane.io/stable
+          helm repo update
+          # Retrying SETUP only — never assertions. A flaky registry pull must
+          # not be indistinguishable from a real regression.
+          for attempt in 1 2 3; do
+            if helm install crossplane crossplane-stable/crossplane \
+                 --namespace crossplane-system --create-namespace --wait --timeout 5m \
+                 ${CHART_VERSION:+--version "$CHART_VERSION"}; then
+              break
+            fi
+            echo "helm install failed (attempt $attempt)"; [ "$attempt" = 3 ] && exit 1
+            helm uninstall crossplane -n crossplane-system || true
+            sleep 15
+          done
+          kubectl get deploy -n crossplane-system
+
+      - name: install packages
+        run: |
+          set -euo pipefail
+          kubectl apply -f test/e2e/manifests/00-packages.yaml
+          # provider-nop v0.5.0 uses Crossplane v2 "safe start": its NopResource
+          # CRD appears once the default ManagedResourceActivationPolicy
+          # activates the MRD, so the CRD wait below covers that timing.
+          kubectl wait --for=condition=Healthy provider.pkg.crossplane.io/provider-nop --timeout=300s
+          kubectl wait --for=condition=Healthy function.pkg.crossplane.io/function-patch-and-transform --timeout=300s
+          kubectl wait --for=condition=Established crd/nopresources.nop.crossplane.io --timeout=180s
+
+      - name: apply fixtures (both Crossplane shapes)
+        run: |
+          set -euo pipefail
+          kubectl apply -f test/e2e/manifests/10-platform-v2.yaml
+          kubectl apply -f test/e2e/manifests/11-platform-v1.yaml
+          # XRDs must be Established before their instances can be created.
+          kubectl wait --for=condition=Established xrd/xstuckapps.example.org --timeout=180s
+          kubectl wait --for=condition=Established xrd/xlegacyapps.legacy.example.org --timeout=180s
+          kubectl apply -f test/e2e/manifests/20-instance-v2.yaml
+          kubectl apply -f test/e2e/manifests/21-instance-v1.yaml
+          # The fixtures are deliberately STUCK, so there is no Ready condition
+          # to wait on. Wait for the composed resources to exist instead — that
+          # is what proves composition ran and the refs are populated.
+          for i in $(seq 1 60); do
+            n=$(kubectl get nopresources.nop.crossplane.io -A --no-headers 2>/dev/null | wc -l)
+            [ "$n" -ge 2 ] && break
+            sleep 5
+          done
+          kubectl get nopresources.nop.crossplane.io -A
+
+      - name: run the diagnostic suite against the cluster
+        env:
+          CROSSPLANE_E2E: "1"
+        run: go -C test/e2e test ./... -run Crossplane -v -timeout 15m
+
+      - name: also verify read-only against the live cluster
+        env:
+          CROSSPLANE_E2E: "1"
+        run: go -C test/e2e test ./... -run ReadOnlyAgainstRealCluster -v -timeout 5m
+
+      # A failure a week after the fact is only actionable with the cluster's
+      # own account of what happened.
+      - name: collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          kind export logs /tmp/e2e-logs --name xpmcp-e2e || true
+          kubectl get all -A -o wide > /tmp/e2e-logs/all-resources.txt 2>&1 || true
+          kubectl get xrd,composition,provider,function -A -o yaml > /tmp/e2e-logs/crossplane.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > /tmp/e2e-logs/events.txt 2>&1 || true
+      - name: upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-cluster-logs
+          path: /tmp/e2e-logs
+          if-no-files-found: ignore
+
+  # ci.yml's notifier only watches ci.yml. Without this, a red weekly e2e run is
+  # exactly as invisible as the red govulncheck run that sat unnoticed for 11
+  # days — the failure mode this repo has already had once.
+  notify-scheduled-failure:
+    name: notify on scheduled failure
+    needs: [kind]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: "Scheduled E2E (kind + Crossplane) is failing"
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n' \
+            "The weekly kind + Crossplane e2e run failed." \
+            "" \
+            "Run: ${RUN_URL} (cluster logs are attached to it as an artifact)" \
+            "" \
+            "Most likely causes, in rough order: a Crossplane package version drifted" \
+            "on the marketplace, the chart changed, or upstream moved composed refs." \
+            "Only the last is a bug in this repo — check the artifact before assuming." \
+            "" \
+            "This issue is reused rather than reopened weekly.")
+          existing=$(gh issue list --state open --json number,title \
+            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "${body}"
+          else
+            gh issue create --title "${TITLE}" --body "${body}"
+          fi

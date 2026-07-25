@@ -28,6 +28,7 @@ import (
 // the DeferredDiscoveryRESTMapper, and the apiserver are all real, and the CRD
 // is genuinely installed mid-session.
 func TestDiscoveryInvalidatesOnMiss(t *testing.T) {
+	requireEnvtest(t)
 	cl := newServerClient(t, testEnv.Config)
 
 	// Populate the discovery cache with a kind that already exists. After this
@@ -72,6 +73,7 @@ func TestDiscoveryInvalidatesOnMiss(t *testing.T) {
 // passes the whole existing suite while silently attributing one resource's
 // events to another.
 func TestEventsUseFieldSelector(t *testing.T) {
+	requireEnvtest(t)
 	ctx := context.Background()
 	cl := newServerClient(t, testEnv.Config)
 	core := kubernetes.NewForConfigOrDie(testEnv.Config)
@@ -104,6 +106,7 @@ func TestEventsUseFieldSelector(t *testing.T) {
 // assert the parsing, this asserts it against an apiserver that actually
 // stores and serves the objects.
 func TestTreeWalkBothRefShapes(t *testing.T) {
+	requireEnvtest(t)
 	ctx := context.Background()
 	cl := newServerClient(t, testEnv.Config)
 	core := kubernetes.NewForConfigOrDie(testEnv.Config)
@@ -158,6 +161,7 @@ func TestTreeWalkBothRefShapes(t *testing.T) {
 // through client-go 0.36's aggregated discovery — the mechanism, not a fake's
 // hand-populated APIResourceList.
 func TestDiscoveryCategoriesSurviveTheWire(t *testing.T) {
+	requireEnvtest(t)
 	cl := newServerClient(t, testEnv.Config)
 
 	kinds, notes, err := cl.DiscoverComposite() // no args -> composite + claim

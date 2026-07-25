@@ -23,6 +23,12 @@ Check these and stop with a clear message if missing:
 - `go` (to build the server) — or an installed `crossplane-mcp` on PATH
 - Network access to pull Crossplane + packages
 
+> **Manifests moved.** They now live in `test/e2e/manifests/` and are shared
+> with the `E2E (kind + Crossplane)` CI workflow, so the manual harness and CI
+> cannot drift apart. A v1/LegacyCluster XRD + Claim
+> (`11-platform-v1.yaml`, `21-instance-v1.yaml`) was added alongside the v2
+> fixture, so one cluster exercises both Crossplane shapes.
+
 ## Steps
 
 Run from the repo root. Treat the bundled manifests as a **starting point** and
@@ -46,12 +52,12 @@ to become Healthy).
 
 3. **Install packages** (provider-nop + function-patch-and-transform):
    ```sh
-   kubectl apply -f .claude/skills/e2e-fixture/manifests/00-packages.yaml
+   kubectl apply -f test/e2e/manifests/00-packages.yaml
    kubectl wait --for=condition=Healthy provider.pkg.crossplane.io/provider-nop --timeout=180s
    kubectl wait --for=condition=Healthy function.pkg.crossplane.io/function-patch-and-transform --timeout=180s
    ```
    If a package isn't Healthy, check its version against the marketplace and
-   update `00-packages.yaml`.
+   update `test/e2e/manifests/00-packages.yaml`.
 
    Note: provider-nop v0.5.0 uses Crossplane v2 **"safe start"** — its
    `NopResource` CRD is created once the cluster's default
@@ -61,11 +67,11 @@ to become Healthy).
 4. **Install the platform** (XRD + Composition), wait for the CRDs to register,
    then apply **the instance** (the XR):
    ```sh
-   kubectl apply -f .claude/skills/e2e-fixture/manifests/10-platform.yaml
+   kubectl apply -f test/e2e/manifests/10-platform-v2.yaml
    kubectl wait --for=condition=Established crd/xstuckapps.example.org --timeout=60s
    # safe-start: the NopResource CRD appears after the default MRAP activates it
    kubectl wait --for=condition=Established crd/nopresources.nop.crossplane.io --timeout=120s
-   kubectl apply -f .claude/skills/e2e-fixture/manifests/20-instance.yaml
+   kubectl apply -f test/e2e/manifests/20-instance-v2.yaml
    ```
 
 5. **Let it settle**, then observe the broken tree with kubectl for ground truth
