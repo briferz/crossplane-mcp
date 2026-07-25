@@ -2,6 +2,14 @@ module github.com/briferz/crossplane-mcp
 
 go 1.26.4
 
+// Build/CI toolchain floor, distinct from the `go` directive above: the `go`
+// line stays at 1.26.4 so it remains the minimum this module asks of consumers,
+// while `toolchain` pins what actually builds it here. CI and the release jobs
+// resolve Go via setup-go's `go-version-file: go.mod`, so without this line they
+// build with exactly 1.26.4 and never pick up stdlib security fixes.
+// Bump this when govulncheck reports a stdlib advisory (see GO-2026-5856).
+toolchain go1.26.5
+
 require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	k8s.io/apimachinery v0.36.3
