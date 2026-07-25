@@ -238,20 +238,26 @@ file/stderr — never stdout,
 which is the MCP protocol channel. (`-` writes to stderr for ad-hoc debugging and
 may interleave with other process output; use a file for clean JSONL.)
 
-By default, two masks run before each record is written:
+By default, three masks run before each record is written:
 
 - **key-based** — scalar values under sensitive keys (`password`, `token`,
   `secret`, `credential`, `apikey`, `accesskey`, `privatekey`, `connection`,
   `dsn`, …) become `[redacted]`, so inline credentials in a resource `spec`
   aren't written verbatim (reference structures like a `secretRef`'s name are kept);
+- **pair-encoded** — in the `{name|key, value|val}` shape that Pod-style `env`
+  and provider-terraform `vars` both use, the *value* is masked when its own
+  `name`/`key` names a secret (`[{name: DB_PASSWORD, value: …}]`). The key-based
+  mask cannot see these: the keys it inspects are literally `name` and `value`.
+  A pair whose name isn't sensitive (`{name: LOG_LEVEL, value: debug}`) is left
+  alone;
 - **content-based** — every logged string is scrubbed for a few high-precision
   secret shapes (PEM private keys, AWS access-key IDs, JWTs, `Authorization:
   Bearer` tokens), which catches credential material the key-based mask misses —
   including in provider *error* text and the decoded OpenTofu blob (`decodedErrors`).
 
-Disable both with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
+Disable all three with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
 
-> **Sensitivity:** both masks are **best-effort, not a guarantee.** The content
+> **Sensitivity:** all three masks are **best-effort, not a guarantee.** The content
 > scrub is deliberately high-precision — it won't catch an arbitrary or
 > unusually-shaped secret, and it intentionally does **not** mask identifiers like
 > account IDs or ARNs (often the actionable detail). Redaction applies only to the
