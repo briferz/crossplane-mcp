@@ -185,5 +185,17 @@ See README "Releasing".
   `deletionTimestamp` with a disjoint `summary.terminating` bucket, so a
   resource whose reconciler died mid-teardown can no longer count as Ready and
   vanish from triage.
+- **Discovery staleness + request bounds** (`internal/k8s/client.go`): the memory
+  discovery cache never expires and the deferred mapper's own reset is gated on
+  `!Fresh()` (permanently false once populated), so a CRD installed mid-session
+  — a provider install, a new XRD, i.e. exactly what prompts someone to reach
+  for this tool — was invisible until restart. `scanForKind` now invalidates and
+  retries **once** on a genuine not-found, rate-limited to one invalidation per
+  5s per Client so a walk over many unresolvable refs cannot re-discover the
+  cluster per miss. An ambiguous kind or a discovery transport error does *not*
+  retry — re-reading discovery cannot fix either. `rest.Config.Timeout` is now
+  set explicitly (`--request-timeout`, default 30s, `0` disables); note it is a
+  per-request deadline on the shared config, so a future genuine Watch would
+  need its own config with `Timeout` unset.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

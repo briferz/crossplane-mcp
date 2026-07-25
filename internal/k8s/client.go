@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,13 +43,31 @@ type Client struct {
 	// loader is the kubeconfig client config used to enumerate contexts. It is
 	// nil when running in-cluster (no kubeconfig contexts exist).
 	loader clientcmd.ClientConfig
+
+	// mu guards lastInvalidate, which rate-limits discovery-cache invalidation
+	// so a walk over many unresolvable refs cannot turn every miss into a full
+	// re-discovery of the cluster.
+	mu             sync.Mutex
+	lastInvalidate time.Time
 }
+
+// DefaultRequestTimeout bounds every API request this client issues. Without it
+// rest.Config.Timeout is 0 and only client-go's own transport defaults apply —
+// 32s on discovery, nothing at all on the dynamic client — so a wedged
+// apiserver or load balancer can park a tool call indefinitely. Overridable
+// with --request-timeout; 0 restores the unbounded behaviour.
+const DefaultRequestTimeout = 30 * time.Second
+
+// invalidateInterval rate-limits discovery invalidation. A tree walk resolves
+// many refs, and a cluster-wide-unresolvable kind would otherwise re-discover
+// the whole cluster once per miss.
+const invalidateInterval = 5 * time.Second
 
 // New builds a Client from a kubeconfig (honouring KUBECONFIG and the default
 // path), optionally pinned to a named context. If no kubeconfig is found it
 // falls back to in-cluster config.
-func New(kubeconfigPath, contextName string) (*Client, error) {
-	cfg, loader, err := restConfig(kubeconfigPath, contextName)
+func New(kubeconfigPath, contextName string, requestTimeout time.Duration) (*Client, error) {
+	cfg, loader, err := restConfig(kubeconfigPath, contextName, requestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +89,13 @@ func New(kubeconfigPath, contextName string) (*Client, error) {
 	return &Client{Dyn: dyn, Disco: cached, Mapper: mapper, loader: loader}, nil
 }
 
-func restConfig(kubeconfigPath, contextName string) (*rest.Config, clientcmd.ClientConfig, error) {
+// restConfig builds the REST config. requestTimeout is applied to whichever
+// path wins (kubeconfig or in-cluster); 0 leaves it unbounded.
+//
+// Note for future work: this timeout is a per-request deadline on the shared
+// config, so a genuine Watch — nothing issues one today — would be truncated at
+// it. A watch client would need its own config with Timeout unset.
+func restConfig(kubeconfigPath, contextName string, requestTimeout time.Duration) (*rest.Config, clientcmd.ClientConfig, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfigPath != "" {
 		rules.ExplicitPath = kubeconfigPath
@@ -83,10 +109,12 @@ func restConfig(kubeconfigPath, contextName string) (*rest.Config, clientcmd.Cli
 	cfg, err := loader.ClientConfig()
 	if err != nil {
 		if inCfg, inErr := rest.InClusterConfig(); inErr == nil {
+			inCfg.Timeout = requestTimeout
 			return inCfg, nil, nil
 		}
 		return nil, nil, fmt.Errorf("load kubeconfig: %w", err)
 	}
+	cfg.Timeout = requestTimeout
 	return cfg, loader, nil
 }
 
@@ -138,7 +166,51 @@ func (c *Client) Resolve(apiVersion, kind string) (Target, error) {
 // from lenient ones (case-insensitive Kind, plural or singular resource name)
 // and win outright when present — so behaviour for a kind that already resolved
 // exactly can never change, and leniency cannot introduce new ambiguity for it.
+// invalidateDiscoveryOnce drops the cached discovery snapshot, at most once per
+// invalidateInterval. Returns whether it actually invalidated.
+//
+// The memory cache never expires on its own and the deferred mapper's own reset
+// is gated on !Fresh(), which is permanently false once populated — so without
+// this a CRD installed mid-session (a provider install, a new XRD: exactly the
+// events that prompt someone to reach for this tool) stays invisible until the
+// server restarts.
+func (c *Client) invalidateDiscoveryOnce() bool {
+	cached, ok := c.Disco.(discovery.CachedDiscoveryInterface)
+	if !ok {
+		return false // uncached client or a test fake: nothing to invalidate
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	if now.Sub(c.lastInvalidate) < invalidateInterval {
+		return false
+	}
+	c.lastInvalidate = now
+	cached.Invalidate()
+	return true
+}
+
+// scanForKind resolves a kind through the discovery cache, retrying once against
+// a freshly invalidated cache when the kind is not found — the kubectl pattern.
+// Only a genuine not-found triggers the retry: an ambiguous kind or a discovery
+// transport error is not something re-reading discovery would fix.
 func (c *Client) scanForKind(kind string, gv *schema.GroupVersion) (Target, error) {
+	t, notFound, err := c.scanForKindAttempt(kind, gv)
+	if !notFound || !c.invalidateDiscoveryOnce() {
+		return t, err
+	}
+	retried, stillMissing, retryErr := c.scanForKindAttempt(kind, gv)
+	if stillMissing {
+		// The retry learned nothing; keep the original error so the message does
+		// not change depending on whether an invalidation happened to be due.
+		return t, err
+	}
+	return retried, retryErr
+}
+
+// scanForKindAttempt is one pass over the discovery view. notFound distinguishes
+// "this kind is not served" from an ambiguity or a discovery failure.
+func (c *Client) scanForKindAttempt(kind string, gv *schema.GroupVersion) (_ Target, notFound bool, _ error) {
 	// The unconstrained scan reads the preferred-resources view: one version per
 	// group, so a kind served at several versions cannot make itself ambiguous.
 	// A gv-constrained scan must read the full groups+resources view instead —
@@ -156,7 +228,7 @@ func (c *Client) scanForKind(kind string, gv *schema.GroupVersion) (Target, erro
 	// Discovery may return partial results alongside an error (e.g. an
 	// unavailable aggregated API). Only fail if we got nothing.
 	if len(lists) == 0 && err != nil {
-		return Target{}, fmt.Errorf("discover resources: %w", err)
+		return Target{}, false, fmt.Errorf("discover resources: %w", err)
 	}
 
 	var exact, lenient []Target
@@ -195,18 +267,18 @@ func (c *Client) scanForKind(kind string, gv *schema.GroupVersion) (Target, erro
 		if err != nil {
 			// Discovery returned a partial list with an error; surface it so a
 			// missing kind caused by a degraded API group is diagnosable.
-			return Target{}, fmt.Errorf("no resource found for kind %q (discovery error: %w)", kind, err)
+			return Target{}, true, fmt.Errorf("no resource found for kind %q (discovery error: %w)", kind, err)
 		}
-		return Target{}, fmt.Errorf("no resource found for kind %q", kind)
+		return Target{}, true, fmt.Errorf("no resource found for kind %q", kind)
 	case 1:
-		return matches[0], nil
+		return matches[0], false, nil
 	default:
 		var cands []string
 		for _, m := range matches {
 			cands = append(cands, m.GVR.GroupVersion().String())
 		}
 		sort.Strings(cands)
-		return Target{}, fmt.Errorf("kind %q is ambiguous; specify apiVersion (candidates: %s)",
+		return Target{}, false, fmt.Errorf("kind %q is ambiguous; specify apiVersion (candidates: %s)",
 			kind, strings.Join(cands, ", "))
 	}
 }
