@@ -40,6 +40,11 @@ type Node struct {
 	creationTime string
 	paused       bool
 	finalizers   []string
+	// nativeReasons explains a verdict reached by a per-kind native rule rather
+	// than by Crossplane conditions (see native.go). Those rules can key on
+	// status.phase or replica counts, which blockingMessages cannot see, so
+	// without this a Blocked native resource would be a suspect with no reasons.
+	nativeReasons []string
 }
 
 // Stats reports traversal coverage.
@@ -184,21 +189,22 @@ func metaTimeString(t metav1.Time) string {
 
 func build(ctx context.Context, cl *k8s.Client, obj *unstructured.Unstructured, depth int, visited map[string]bool, st *Stats) *Node {
 	conds := Conditions(obj)
-	health, state := Classify(obj.GetAPIVersion(), conds)
+	health, state, nativeReasons := ClassifyObject(obj)
 	n := &Node{
-		APIVersion:   obj.GetAPIVersion(),
-		Kind:         obj.GetKind(),
-		Name:         obj.GetName(),
-		Namespace:    obj.GetNamespace(),
-		State:        state,
-		Health:       health,
-		Conditions:   conds,
-		uid:          string(obj.GetUID()),
-		depth:        depth,
-		deletionTime: deletionTime(obj),
-		creationTime: metaTimeString(obj.GetCreationTimestamp()),
-		paused:       IsPaused(obj),
-		finalizers:   obj.GetFinalizers(),
+		APIVersion:    obj.GetAPIVersion(),
+		Kind:          obj.GetKind(),
+		Name:          obj.GetName(),
+		Namespace:     obj.GetNamespace(),
+		State:         state,
+		Health:        health,
+		Conditions:    conds,
+		uid:           string(obj.GetUID()),
+		depth:         depth,
+		deletionTime:  deletionTime(obj),
+		creationTime:  metaTimeString(obj.GetCreationTimestamp()),
+		paused:        IsPaused(obj),
+		finalizers:    obj.GetFinalizers(),
+		nativeReasons: nativeReasons,
 	}
 	st.Nodes++
 

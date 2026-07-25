@@ -211,5 +211,23 @@ See README "Releasing".
   runs to completion rather than stopping at the caller's limit: the pre-cap
   `Scanned`/`Summary` totals and the global Blocked-before-Pending ordering both
   need the whole set.
+- **Per-kind native readiness** (`internal/xp/native.go`): `ClassifyObject` wraps
+  `Classify` with access to the whole object and applies an **exact `(group,
+  kind)` table** — `apps/Deployment`, `batch/Job`, `core/PersistentVolumeClaim`,
+  `core/Pod`, `apps/StatefulSet`. Never a polarity heuristic: for `core/Node`
+  (`MemoryPressure`/`DiskPressure`/`PIDPressure`) and
+  `policy/PodDisruptionBudget` (`DisruptionAllowed`), **`False` is the healthy
+  value**, so any "native condition False → Blocked" fold is wrong on contact.
+  Kinds outside the table keep `Classify`'s verdict — strictly additive.
+  This also fixed a **live false positive**: a Pod in phase `Succeeded` is
+  `Ready=False`/`PodCompleted` forever, which `Classify` read as `StateBlocked`
+  — tier 0 — so every finished init/migration Pod was the top-ranked suspect
+  permanently. Rules keep `Pending` and `Blocked` distinct (a rollout in flight,
+  a running Job, and a `WaitForFirstConsumer` PVC are `Pending`, never
+  `Blocked`), and every non-Ready verdict carries a reason via
+  `Node.nativeReasons` → `causeMessages` — pinned by
+  `TestNativeVerdictsAlwaysExplained`. `Classify`'s signature is unchanged, and
+  `BuildUnhealthy` deliberately stays on it: `k8s.ProjectTriageFields` drops
+  `spec` and `status.phase`, so object-aware classification is unavailable there.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).

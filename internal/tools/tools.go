@@ -280,7 +280,7 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 			return nil, nil, err
 		}
 		conds := xp.Conditions(obj)
-		health, state := xp.Classify(obj.GetAPIVersion(), conds)
+		health, state, _ := xp.ClassifyObject(obj)
 		spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
 
 		view := &ResourceView{

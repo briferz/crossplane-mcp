@@ -106,6 +106,16 @@ The tree-walker must:
   `list_configurations` tools — note `Classify` deliberately ignores
   `Installed`, packages use their own fold-over-all-conditions classifier).
 
+`ClassifyObject` (`internal/xp/native.go`) wraps `Classify` with access to the
+whole object and applies an exact `(group, kind)` readiness table for the native
+kinds a v2 XR most often composes: `apps/Deployment` (Progressing gated on
+`ProgressDeadlineExceeded`, so a paused Deployment is never Blocked),
+`batch/Job`, `core/PersistentVolumeClaim` (`status.phase`, and `Pending` is
+never `Blocked` — `WaitForFirstConsumer` sits there by design), `core/Pod`
+(phase-only), and `apps/StatefulSet` (replica counts, never `Blocked`). The
+table is never a polarity heuristic: for `core/Node` and
+`policy/PodDisruptionBudget`, `False` is the *healthy* condition value.
+
 `Classify` also returns a fourth state, `Unknown`, for objects in built-in
 Kubernetes API groups that carry none of `Ready`/`Synced`/`Healthy` — the
 ConfigMaps, Services and Deployments a v2 XR composes directly. They are not
