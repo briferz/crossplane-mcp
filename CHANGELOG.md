@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/briferz/crossplane-mcp/compare/v0.7.0...v0.8.0) (2026-07-25)
+
+
+### Features
+
+* **xp:** assess per-kind readiness of natively composed resources ([#53](https://github.com/briferz/crossplane-mcp/issues/53)) ([366bef8](https://github.com/briferz/crossplane-mcp/commit/366bef865cdca038c6c2975b1d1cceee5597f685))
+
 ## [0.7.0](https://github.com/briferz/crossplane-mcp/compare/v0.6.0...v0.7.0) (2026-07-25)
 
 
