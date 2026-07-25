@@ -19,16 +19,19 @@ import (
 // and any error — so a session against a real cluster can be inspected later.
 // Enabled via --log-file / CROSSPLANE_MCP_LOG_FILE.
 //
-// It records the full tool input and output. By default (redact=true) two
+// It records the full tool input and output. By default (redact=true) three
 // masks run: (1) key-based — scalar values under sensitive keys
-// (password/token/secret/credential/…) are masked, so inline credentials in a
-// resource spec are not written verbatim; (2) content-based — every logged
-// string value is scrubbed for a few high-precision secret shapes (PEM private
-// keys, AWS access-key IDs, JWTs, Authorization: Bearer tokens), which catches
-// credential material the key-based mask misses, including in provider error
-// text and the decoded provider-terraform/OpenTofu blob (decodedErrors).
+// (password/token/secret/credential/…) are masked; (2) pair-encoded —
+// in the {name|key, value|val} shape that Pod env and provider-terraform vars
+// both use, the value is masked when its own name/key names a secret, which the
+// key-based mask cannot see (the keys it inspects are literally "name" and
+// "value"); (3) content-based — every logged string value is scrubbed for a few
+// high-precision secret shapes (PEM private keys, AWS access-key IDs, JWTs,
+// Authorization: Bearer tokens), which catches credential material the first two
+// miss, including in provider error text and the decoded
+// provider-terraform/OpenTofu blob (decodedErrors).
 //
-// Both masks are BEST-EFFORT, not a guarantee: the content scrub is deliberately
+// All three are BEST-EFFORT, not a guarantee: the content scrub is deliberately
 // high-precision and will not catch an arbitrary or unusually-shaped secret, and
 // it intentionally does NOT mask identifiers like account IDs or ARNs (they are
 // often the actionable detail). Redaction applies only to the log; the live tool
@@ -148,6 +151,43 @@ func (r *Recorder) record(name string, dur time.Duration, in, out any, callErr e
 
 const redactedMarker = "[redacted]"
 
+// pairNameKeys / pairValueKeys are the two halves of the {name, value} shape
+// that Kubernetes and Terraform both use for variable lists — Pod-style env
+// (`[{name: DB_PASSWORD, value: …}]`) and provider-terraform vars
+// (`[{key: db_password, value: …}]`).
+//
+// The key-based mask alone cannot see these: the keys it inspects are literally
+// "name", "key" and "value", none of which is sensitive, so the credential is
+// carried by a field whose own name says nothing about it. This is the commonest
+// inline-credential shape in the specs this server reads.
+var (
+	pairNameKeys  = []string{"name", "key"}
+	pairValueKeys = []string{"value", "val"}
+)
+
+// redactPairEncoded masks a map's value sibling when its own name/key names a
+// secret. Deliberately structural and narrow: it fires only on this exact
+// two-field shape, so a legitimate field called "value" under a non-sensitive
+// "name" is untouched. Broadening sensitiveKeyParts instead would mask the
+// diagnostic detail this tool exists to surface.
+func redactPairEncoded(t map[string]any) {
+	named := false
+	for _, nk := range pairNameKeys {
+		if s, ok := t[nk].(string); ok && sensitiveKey(s) {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return
+	}
+	for _, vk := range pairValueKeys {
+		if val, ok := t[vk]; ok && isScalar(val) {
+			t[vk] = redactedMarker
+		}
+	}
+}
+
 // sensitiveKey reports whether a field name suggests an inline secret value.
 // Matched case-insensitively as substrings. Kept narrow enough to avoid masking
 // innocuous fields (e.g. bare "key") while catching the dangerous ones.
@@ -242,6 +282,7 @@ func redactValue(v any) any {
 				t[k] = redactValue(val)
 			}
 		}
+		redactPairEncoded(t)
 		return t
 	case []any:
 		for i := range t {
