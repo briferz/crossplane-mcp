@@ -125,16 +125,48 @@ func eventLine(e k8s.Event) string {
 	return s
 }
 
-// attribute decides the single cause line for a suspect. It defaults to the
-// first blocking-condition message — byte-identical to the previous behaviour —
-// and overrides to the recurring event only when that condition is absent or a
+// leadFirst reorders blocking-condition messages so the first genuine failure
+// leads, instead of whichever line the controller happened to write first.
+// status.conditions has no defined order and nothing sorts it, so a transport
+// flake listed above a real error would otherwise become the headline.
+//
+// The input is returned unchanged when it is empty, when the first message is
+// already non-noise, or when EVERY message is transport noise. That last case is
+// the important one: for provider-http and provider-kubernetes endpoints
+// "connection refused" IS the root cause, so an all-noise suspect keeps its
+// lead and only a qualifying recurring composition event may supersede it.
+//
+// Never mutates the caller's slice.
+func leadFirst(condMsgs []string) []string {
+	if len(condMsgs) == 0 || !isTransportNoise(condMsgs[0]) {
+		return condMsgs
+	}
+	for i, m := range condMsgs {
+		if isTransportNoise(m) {
+			continue
+		}
+		out := make([]string, 0, len(condMsgs))
+		out = append(out, m)
+		out = append(out, condMsgs[:i]...)
+		out = append(out, condMsgs[i+1:]...)
+		return out
+	}
+	return condMsgs
+}
+
+// attribute decides the single cause line for a suspect. It leads with the first
+// NON-noise blocking condition (see leadFirst), and overrides to the recurring
+// event only when no condition message exists or every one of them is a
 // transport flake AND a qualifying composition event exists. fromEvent reports
 // whether the event won, so callers can order Reasons accordingly.
 func attribute(condMsgs []string, events []k8s.Event) (msg string, fromEvent bool) {
+	msgs := leadFirst(condMsgs)
 	lead := ""
-	if len(condMsgs) > 0 {
-		lead = condMsgs[0]
+	if len(msgs) > 0 {
+		lead = msgs[0]
 	}
+	// isTransportNoise(lead) is now true only when EVERY condition is noise —
+	// exactly the corroborating-event gate this override is meant to be.
 	if e, ok := qualifyingEvent(events); ok && (lead == "" || isTransportNoise(lead)) {
 		return eventLine(e), true
 	}

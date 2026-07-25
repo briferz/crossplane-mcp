@@ -24,6 +24,12 @@ type UnhealthyItem struct {
 	// surfaced at triage time because a paused resource never reconciles, so
 	// its row's conditions may be stale and diagnose will route differently.
 	Paused bool `json:"paused,omitempty"`
+	// DeletionTimestamp is set (RFC3339) while the resource is being deleted. A
+	// row can carry it while still reporting Ready: a dead or blocked reconciler
+	// leaves conditions frozen at their last value. Such rows are kept even in
+	// the default not-Ready-only view, because a teardown wedged for months is
+	// exactly what triage must not hide. Same reasoning as Paused.
+	DeletionTimestamp string `json:"deletionTimestamp,omitempty"`
 }
 
 // UnhealthySummary is the pre-cap tally across everything scanned, so the counts
@@ -32,6 +38,11 @@ type UnhealthySummary struct {
 	Blocked int `json:"blocked"`
 	Pending int `json:"pending"`
 	Ready   int `json:"ready"`
+	// Terminating counts resources with a deletionTimestamp whatever their
+	// conditions say, mirroring diagnose's headline counts. Disjoint from the
+	// other three — the four still sum to Scanned — and omitted entirely when
+	// nothing is deleting, so existing output stays byte-identical.
+	Terminating int `json:"terminating,omitempty"`
 }
 
 // UnhealthyResult is the classified, filtered, sorted, capped triage output.
@@ -66,11 +77,18 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 			continue
 		}
 		health, state := Classify(obj.GetAPIVersion(), Conditions(obj))
+		dt := deletionTime(obj)
 		res.Scanned++
-		switch state {
-		case StateBlocked:
+		// Terminating is checked first and counted separately: a resource whose
+		// reconciler died mid-teardown keeps Ready=True forever, so classifying
+		// it by conditions alone would tally it as healthy and drop it from
+		// triage — the exact state diagnose refuses to call healthy.
+		switch {
+		case dt != "":
+			res.Summary.Terminating++
+		case state == StateBlocked:
 			res.Summary.Blocked++
-		case StatePending:
+		case state == StatePending:
 			res.Summary.Pending++
 		default:
 			// Ready, plus StateUnknown — not-failing either way.
@@ -81,7 +99,9 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 		// discovery is category-scoped (composite/claim/managed) and native types
 		// are never stamped with those Crossplane categories, so this is currently
 		// unreachable here.
-		if (state == StateReady || state == StateUnknown) && !p.IncludeHealthy {
+		// A terminating row survives the healthy filter whatever its conditions
+		// say — that is the whole point of reading deletionTimestamp here.
+		if (state == StateReady || state == StateUnknown) && dt == "" && !p.IncludeHealthy {
 			continue
 		}
 		items = append(items, UnhealthyItem{
@@ -94,6 +114,8 @@ func BuildUnhealthy(listed []k8s.Listed, p UnhealthyParams) *UnhealthyResult {
 			Ready:      health.Ready,
 			Synced:     health.Synced,
 			Paused:     IsPaused(obj),
+
+			DeletionTimestamp: dt,
 		})
 	}
 
