@@ -211,6 +211,7 @@ live in the `default` namespace).
 |---|---|---|
 | `--kubeconfig` | `$KUBECONFIG` / `~/.kube/config` | Path to kubeconfig. |
 | `--context` | current-context | Kubeconfig context to use. |
+| `--request-timeout` | `30s` | Per-request timeout for Kubernetes API calls. `0` disables it, restoring the previous behaviour where only client-go's transport defaults applied — a wedged apiserver or load balancer could then park a tool call indefinitely. Raise it if a very large cluster-wide `list_unhealthy` is being cut off. |
 | `--log-file` | | Append a JSONL record of each tool call to this path (or `-` for stderr). Also via `CROSSPLANE_MCP_LOG_FILE`. |
 | `--log-redact` | `true` | Mask sensitive values in the `--log-file` records; disable with `--log-redact=false`. Also via `CROSSPLANE_MCP_LOG_REDACT=false`. |
 | `--version` | | Print version and exit. |

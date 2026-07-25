@@ -36,6 +36,7 @@ Every tool is read-only: only Kubernetes get/list requests are issued and nothin
 func main() {
 	var (
 		kubeconfig  = flag.String("kubeconfig", "", "path to kubeconfig (defaults to KUBECONFIG / ~/.kube/config; in-cluster if absent)")
+		reqTimeout  = flag.Duration("request-timeout", k8s.DefaultRequestTimeout, "per-request timeout for Kubernetes API calls; 0 disables (a wedged apiserver can then park a tool call indefinitely)")
 		kubeContext = flag.String("context", "", "kubeconfig context to use (defaults to current-context)")
 		logFile     = flag.String("log-file", "", "append a JSONL record of each tool call (input+output) to this path, or '-' for stderr; also via CROSSPLANE_MCP_LOG_FILE")
 		logRedact   = flag.Bool("log-redact", true, "mask scalar values under sensitive keys (password/token/secret/…) in the log; also via CROSSPLANE_MCP_LOG_REDACT=false")
@@ -68,7 +69,7 @@ func main() {
 		defer func() { _ = rec.Close() }()
 	}
 
-	cl, err := k8s.New(*kubeconfig, *kubeContext)
+	cl, err := k8s.New(*kubeconfig, *kubeContext, *reqTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crossplane-mcp: %v\n", err)
 		os.Exit(1)
