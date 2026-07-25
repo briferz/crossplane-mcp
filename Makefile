@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 IMAGE ?= ghcr.io/briferz/crossplane-mcp
 
-.PHONY: build test vet fmt fmt-check lint vulncheck check docker clean e2e-vet e2e-envtest e2e-crossplane
+.PHONY: build test vet fmt fmt-check lint vulncheck check docker clean e2e-vet e2e-envtest e2e-native e2e-crossplane
 
 build:
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) $(PKG)
@@ -44,6 +44,13 @@ e2e-vet:
 e2e-envtest:
 	@KUBEBUILDER_ASSETS="$$(go run $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(CURDIR)/bin/envtest -p path)" \
 		go -C test/e2e test ./... -timeout 10m
+
+# Real controllers and a real kubelet, no Crossplane. Answers what upstream
+# controllers actually write into status — the thing internal/xp/native.go
+# encodes and unit tests cannot check, since they assert against conditions this
+# repo authored. Needs any real cluster (kind is enough).
+e2e-native:
+	CLUSTER_E2E=1 go -C test/e2e test ./... -run NativeReadiness -v -timeout 20m
 
 # Full-fidelity tier: needs a real cluster with Crossplane already installed
 # (see .claude/skills/e2e-fixture). Never part of `check` — it is minutes, not

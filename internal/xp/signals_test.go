@@ -265,3 +265,154 @@ func TestBuildTreeCappedOnlyWhenSomethingSkipped(t *testing.T) {
 		}
 	})
 }
+
+// A fifth signal, and the one only a real cluster surfaced: a suspect that names
+// itself and then explains nothing. Both shapes below reach diagnose from real
+// providers, and neither is reachable from the fixtures elsewhere in this
+// package, which always write a reason or a message.
+
+// TestSuspectWithBareConditionExplained covers a condition that is False but
+// carries neither reason nor message. conditionLine renders that as "", so
+// blockingMessages drops it entirely — leaving a Blocked, top-ranked suspect
+// with an empty Reasons list.
+//
+// provider-nop constructs conditions with no message at all, and a reason only
+// when the fixture supplies conditionReason; the e2e fixture supplies neither.
+// So this is very likely the shape the kind + Crossplane tier hit — though the
+// run itself could not prove it, since the composed object was not captured.
+// That is an inference, not a measurement; the workflow now collects the object
+// so a recurrence settles it.
+func TestSuspectWithBareConditionExplained(t *testing.T) {
+	root := node(0, "App", "a",
+		[]Condition{cond("Synced", "True", "", ""), cond("Ready", "False", "", "")})
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if len(d.Suspects) == 0 {
+		t.Fatal("a resource with Ready=False must be a suspect")
+	}
+	top := d.Suspects[0]
+	if len(top.Reasons) == 0 {
+		t.Fatal("a suspect must explain itself even when the condition carries no text")
+	}
+	if !strings.Contains(top.Reasons[0], "Ready") {
+		t.Errorf("the explanation must name the failing condition, got %q", top.Reasons[0])
+	}
+	// The headline is the other output boundary the same gap reached.
+	if !strings.Contains(d.Summary, "Ready") {
+		t.Errorf("summary names a root cause, so it must say what is wrong with it: %q", d.Summary)
+	}
+	// Synced=True is not a problem and must not be reported as one.
+	for _, r := range top.Reasons {
+		if strings.Contains(r, "Synced") {
+			t.Errorf("a True condition is not a reason: %q", r)
+		}
+	}
+}
+
+// TestSuspectWithNoConditionsExplained covers a managed resource the provider
+// has not reconciled yet. Classify calls it Pending precisely so a fresh MR
+// cannot read as healthy — but Pending with no conditions produced no reasons.
+func TestSuspectWithNoConditionsExplained(t *testing.T) {
+	root := node(0, "Bucket", "b", nil)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if len(d.Suspects) == 0 {
+		t.Fatal("a resource with no conditions is Pending, and Pending resources are suspects")
+	}
+	if len(d.Suspects[0].Reasons) == 0 {
+		t.Fatal("a suspect must explain itself; 'no conditions yet' is an explanation")
+	}
+}
+
+// TestTerminatingReadySuspectNotMisexplained is the guard on the Pending gate.
+// A resource wedged mid-teardown with frozen Ready=True is a suspect, and
+// claiming "nothing has written status" about it would be plainly false — its
+// story is the lifecycle label and its finalizers.
+func TestTerminatingReadySuspectNotMisexplained(t *testing.T) {
+	root := node(0, "Bucket", "b",
+		[]Condition{cond("Ready", "True", "", ""), cond("Synced", "True", "", "")})
+	root.deletionTime = "2026-01-15T00:00:00Z"
+	root.finalizers = []string{"finalizer.managedresource.crossplane.io"}
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if len(d.Suspects) == 0 {
+		t.Fatal("a terminating resource must stay in triage even with Ready=True")
+	}
+	for _, r := range d.Suspects[0].Reasons {
+		if strings.Contains(r, "no status conditions") {
+			t.Errorf("this resource HAS conditions; the fallback must not claim otherwise: %q", r)
+		}
+	}
+}
+
+// TestBareStateDoesNotDisplaceRecurringEvent is the guard on WHERE the bare-state
+// fallback is applied. The lines it produces state the ABSENCE of an
+// explanation, so they must behave like absence for attribution: attribute
+// overrides to a recurring composition event only when the lead is empty or a
+// transport flake (issue #24 P1). Putting the fallback inside causeMessages —
+// the obvious place — gives attribute a non-empty, non-noise lead, silently
+// defeating that override and demoting a real recurring event with its full
+// message to a bare "Recurring event: R (xN)" suffix.
+//
+// This is precisely the population the fallback targets (bare or absent
+// conditions), so the two features collide by construction rather than by
+// coincidence.
+func TestBareStateDoesNotDisplaceRecurringEvent(t *testing.T) {
+	const detail = "cannot compose resources: required value missing at spec.forProvider.region"
+	ev := &stubEvents{events: []k8s.Event{
+		{Reason: "ComposeResources", Type: "Warning", Count: 42, Message: detail, Last: "2026-01-01T00:00:00Z"},
+	}}
+
+	for _, tc := range []struct {
+		name  string
+		conds []Condition
+	}{
+		{"bare-condition", []Condition{cond("Ready", "False", "", "")}},
+		{"no-conditions", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := node(0, "App", "a", tc.conds)
+
+			d := Diagnose(context.Background(), ev, root, Stats{Nodes: 1}, false)
+
+			if len(d.Suspects) == 0 {
+				t.Fatal("expected a suspect")
+			}
+			// The event must still LEAD the reasons, not trail them.
+			lead := d.Suspects[0].Reasons[0]
+			if !strings.Contains(lead, "ComposeResources") {
+				t.Errorf("the recurring composition event must still lead the reasons, got %q", lead)
+			}
+			// And the summary must carry its full message, not just reason+count.
+			if !strings.Contains(d.Summary, detail) {
+				t.Errorf("summary lost the recurring event's message: %q", d.Summary)
+			}
+		})
+	}
+}
+
+// TestBareStateNotAppliedToUnassessedNative guards the state gate. A native kind
+// outside native.go's table carries no Ready/Synced/Healthy, so Classify calls
+// it StateUnknown — never assessed. Some native vocabularies are False when
+// HEALTHY (a PodDisruptionBudget's DisruptionAllowed, a Node's MemoryPressure),
+// so naming a False condition on one would invent a problem that does not exist.
+func TestBareStateNotAppliedToUnassessedNative(t *testing.T) {
+	root := nodeAPI(0, "policy/v1", "PodDisruptionBudget", "pdb",
+		[]Condition{cond("DisruptionAllowed", "False", "", "")})
+	root.deletionTime = "2026-01-15T00:00:00Z" // terminating, so it is a suspect
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if len(d.Suspects) == 0 {
+		t.Fatal("a terminating resource must stay in triage")
+	}
+	for _, r := range d.Suspects[0].Reasons {
+		if strings.Contains(r, "DisruptionAllowed") {
+			t.Errorf("False is the HEALTHY value for this condition and the resource was "+
+				"never assessed; reporting it as a cause invents a problem: %q", r)
+		}
+	}
+}

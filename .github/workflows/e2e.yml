@@ -101,11 +101,20 @@ jobs:
           kubectl apply -f test/e2e/manifests/20-instance-v2.yaml
           kubectl apply -f test/e2e/manifests/21-instance-v1.yaml
           # The fixtures are deliberately STUCK, so there is no Ready condition
-          # to wait on. Wait for the composed resources to exist instead — that
-          # is what proves composition ran and the refs are populated.
+          # to wait on. Wait for the composed resources to carry STATUS instead:
+          # existence alone proves composition ran, but a NopResource the
+          # provider has not reconciled yet has no conditions at all, and the
+          # assertions below are about a resource that is stuck non-Ready — not
+          # one that is merely new. Waiting on existence made those two
+          # indistinguishable.
+          # Require a READY condition specifically, not merely any condition: a
+          # Synced-only instant would classify the NopResource healthy and flunk
+          # the top-suspect assertion for a reason that has nothing to do with
+          # the code under test.
           for i in $(seq 1 60); do
-            n=$(kubectl get nopresources.nop.crossplane.io -A --no-headers 2>/dev/null | wc -l)
-            [ "$n" -ge 2 ] && break
+            n=$(kubectl get nopresources.nop.crossplane.io -A -o json 2>/dev/null \
+                  | jq '[.items[] | select(.status.conditions // [] | any(.type == "Ready"))] | length')
+            [ "${n:-0}" -ge 2 ] && break
             sleep 5
           done
           kubectl get nopresources.nop.crossplane.io -A
@@ -129,6 +138,15 @@ jobs:
           kind export logs /tmp/e2e-logs --name xpmcp-e2e || true
           kubectl get all -A -o wide > /tmp/e2e-logs/all-resources.txt 2>&1 || true
           kubectl get xrd,composition,provider,function -A -o yaml > /tmp/e2e-logs/crossplane.yaml 2>&1 || true
+          # The XRs and the resources they compose — i.e. the objects the
+          # assertions actually read. Without these a failure about a suspect's
+          # conditions cannot be diagnosed from the artifact at all, which is
+          # how the first real failure here left two candidate root causes
+          # indistinguishable a week after the fact.
+          kubectl get xstuckapps,xlegacyapps,legacyappclaims -A -o yaml \
+            > /tmp/e2e-logs/composites.yaml 2>&1 || true
+          kubectl get nopresources.nop.crossplane.io -A -o yaml \
+            > /tmp/e2e-logs/composed.yaml 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > /tmp/e2e-logs/events.txt 2>&1 || true
       - name: upload diagnostics
         if: failure()
@@ -138,12 +156,77 @@ jobs:
           path: /tmp/e2e-logs
           if-no-files-found: ignore
 
+  # The native-readiness tier. Separate from the job above on purpose: it needs a
+  # real kube-controller-manager and kubelet but NOT Crossplane, so kindest/node
+  # and one pause image are its only external dependencies — none of the three
+  # registries that force the Crossplane job onto a weekly cadence. That makes it
+  # a candidate for running on every PR later; it is kept on the same triggers
+  # for now rather than widening CI unilaterally.
+  #
+  # What it establishes: that internal/xp/native.go's rules match what upstream
+  # controllers really write. Unit tests assert against conditions this repo
+  # authored, so they only prove the rules read their own fixtures back.
+  native:
+    name: kind (native readiness)
+    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'e2e' }}
+    runs-on: ubuntu-latest
+    # Comfortably above the test's own 20m timeout plus setup. If the JOB times
+    # out the run is cancelled and the if: failure() diagnostics never execute,
+    # so the budget must let the test fail on its own terms first.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: create cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: xpmcp-native
+          wait: 120s
+
+      # Preloaded so the recovery half of the rollout probe resolves the image
+      # locally. Without this the fixed rollout races its own 15s progress
+      # deadline against a registry pull, and a timing flake would be
+      # indistinguishable from the real finding the probe exists to report.
+      - name: preload the probe image
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull registry.k8s.io/pause:3.10; then break; fi
+            echo "pull failed (attempt $attempt)"; [ "$attempt" = 3 ] && exit 1
+            sleep 10
+          done
+          kind load docker-image registry.k8s.io/pause:3.10 --name xpmcp-native
+
+      - name: probe native readiness against real controllers
+        env:
+          CLUSTER_E2E: "1"
+        run: go -C test/e2e test ./... -run NativeReadiness -v -timeout 20m
+
+      - name: collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p /tmp/native-logs
+          kubectl get deploy,rs,pod -A -o wide > /tmp/native-logs/workloads.txt 2>&1 || true
+          kubectl get deploy -A -o yaml > /tmp/native-logs/deployments.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > /tmp/native-logs/events.txt 2>&1 || true
+      - name: upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-readiness-logs
+          path: /tmp/native-logs
+          if-no-files-found: ignore
+
   # ci.yml's notifier only watches ci.yml. Without this, a red weekly e2e run is
   # exactly as invisible as the red govulncheck run that sat unnoticed for 11
   # days — the failure mode this repo has already had once.
   notify-scheduled-failure:
     name: notify on scheduled failure
-    needs: [kind]
+    needs: [kind, native]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     permissions:
@@ -154,17 +237,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TITLE: "Scheduled E2E (kind + Crossplane) is failing"
+          TITLE: "Scheduled E2E (kind) is failing"
         run: |
           set -euo pipefail
           body=$(printf '%s\n' \
-            "The weekly kind + Crossplane e2e run failed." \
+            "The weekly kind e2e run failed. Check the run to see which job:" \
             "" \
             "Run: ${RUN_URL} (cluster logs are attached to it as an artifact)" \
             "" \
-            "Most likely causes, in rough order: a Crossplane package version drifted" \
-            "on the marketplace, the chart changed, or upstream moved composed refs." \
-            "Only the last is a bug in this repo — check the artifact before assuming." \
+            "kind + Crossplane — most likely a package version drifted on the" \
+            "marketplace or the chart changed; only 'upstream moved composed refs'" \
+            "is a bug in this repo. Check the artifact before assuming." \
+            "" \
+            "kind (native readiness) — far more likely to be real. Its only external" \
+            "dependencies are kindest/node and the pause image, so a failure here" \
+            "usually means upstream changed how a controller writes status and" \
+            "internal/xp/native.go encodes the old shape." \
             "" \
             "This issue is reused rather than reopened weekly.")
           existing=$(gh issue list --state open --json number,title \
