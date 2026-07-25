@@ -42,7 +42,18 @@ make check      # fmt-check + vet + lint + test + vulncheck (mirrors CI)
 1. **Read-only invariant.** Only `get` / `list` / `watch` verbs, ever. Never
    `Create` / `Update` / `Delete` / `Patch` / `Apply`, and no write-capable
    clients. This is the project's core promise (safe to point at production).
-   New tools must preserve it.
+   New tools must preserve it. **Enforced mechanically, not by convention:** a
+   `forbidigo` rule in `.golangci.yml` fails the lint gate (a required check on
+   `main`) on any dynamic-client write method, and
+   `TestHandlersIssueOnlyReadVerbs` drives every handler against the dynamic
+   fake asserting only `get`/`list` actions — a backstop for anything routed
+   through `Client.Dyn`, which is where every cluster call goes today.
+   `Client.Dyn` stays a write-capable `dynamic.Interface` because client-go
+   offers no read-only variant and cross-package tests inject a fake.
+   **Re-verify the rule after a client-go bump:** it is a denylist of the eight
+   write methods, so a *renamed* interface stops matching silently and a *newly
+   added* write method is not covered at all (RE2 has no lookahead, so an
+   allowlist inversion is not expressible).
 2. **Crossplane v2 *and* v1/LegacyCluster.** Handle namespaced XRs (v2, no
    Claims) and cluster-scoped Claims (v1). The tree-walk and namespace logic
    must cope with both. **Note the ref location differs by version:** v1 XRs put
@@ -50,7 +61,12 @@ make check      # fmt-check + vet + lint + test + vulncheck (mirrors CI)
    Crossplane machinery under `spec.crossplane`, so composed refs are at
    `spec.crossplane.resourceRefs`.** The tree-walker must read both.
 3. **No secret contents in output.** Report connection-secret presence/status
-   only, never values.
+   only, never values. Precise scope: a Secret referenced by an XR *is* fetched
+   during a tree walk like any other node — the promise is about what leaves the
+   process, not what it reads. It holds because the output structs are closed
+   projections (`ResourceView` carries `spec`, and a core/v1 Secret has none);
+   `TestSecretContentsNeverReturned` pins that, so a future raw-object field
+   fails there rather than silently disclosing.
 4. **Token-light output.** Prune `managedFields` / noisy annotations; return only
    failing conditions/events by default. Never re-introduce truncation of
    condition messages (the whole point over `crossplane resource trace`).

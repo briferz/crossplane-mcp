@@ -175,8 +175,13 @@ never truncated.
 ### Least-privilege RBAC
 
 The server only ever issues `get`/`list`/`watch`, so it can run under a role
-that *cannot* mutate anything. [`deploy/rbac.yaml`](./deploy/rbac.yaml) ships
-two ready-made options:
+that *cannot* mutate anything. That invariant is enforced mechanically rather
+than by convention: a `forbidigo` rule in [`.golangci.yml`](./.golangci.yml)
+fails the lint gate (a required check on `main`) on any write method called
+through the dynamic client, and
+`TestHandlersIssueOnlyReadVerbs` drives every tool handler against a fake API
+server and asserts only `get`/`list` calls were recorded.
+[`deploy/rbac.yaml`](./deploy/rbac.yaml) ships two ready-made options:
 
 - **Recommended** (standard Crossplane install): bind the aggregated
   `crossplane-view` ClusterRole that Crossplane's RBAC manager maintains — it
@@ -250,9 +255,14 @@ Disable both with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`.
 > unusually-shaped secret, and it intentionally does **not** mask identifiers like
 > account IDs or ARNs (often the actionable detail). Redaction applies only to the
 > log, never to the live tool response; values that must stay hidden should be
-> marked `sensitive` in the Terraform/OpenTofu config. The server never reads
-> Kubernetes Secret objects. Treat the log as potentially sensitive and **review
-> it before sharing off a machine that touches production.**
+> marked `sensitive` in the Terraform/OpenTofu config. What gets logged is the
+> same closed projections the tools return — built from a resource's metadata,
+> spec, status, and events, never the raw object — and a Secret keeps its
+> `data`/`stringData` at top level, outside all of those, so Secret values never
+> reach the log either. (A Secret composed by an XR is still fetched during a
+> tree walk, like any other node; only its contents are withheld.) Treat the log
+> as potentially sensitive and **review it before sharing off a machine that
+> touches production.**
 
 ## Development
 

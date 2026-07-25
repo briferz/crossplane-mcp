@@ -32,7 +32,12 @@ import (
 // high-precision and will not catch an arbitrary or unusually-shaped secret, and
 // it intentionally does NOT mask identifiers like account IDs or ARNs (they are
 // often the actionable detail). Redaction applies only to the log; the live tool
-// response is never altered. The server never reads Kubernetes Secret objects.
+// response is never altered. What gets logged is the same closed projections the
+// tools return — built from a resource's metadata, spec, status and events,
+// never the raw object — and a Secret keeps its data/stringData at top level,
+// outside all of those, so Secret values never reach the log either. (A Secret
+// composed by an XR is still fetched during a tree walk, like any other node;
+// only its contents are withheld.)
 // Treat the log as potentially sensitive and review it before sharing off a
 // machine that touches production.
 type Recorder struct {

@@ -265,8 +265,13 @@ Large k8s objects wreck an LLM context. Defaults:
 - Context selectable via `list_contexts` + the `--context` server flag (one
   context per server process); a per-call `context` arg is an open question (§9).
 - **Read-only by construction:** only `get`/`list`/`watch` verbs are ever
-  issued — and declared at the protocol level: every tool carries the MCP
-  `readOnlyHint` annotation, and the server publishes workflow instructions.
+  issued — declared at the protocol level (every tool carries the MCP
+  `readOnlyHint` annotation, and the server publishes workflow instructions)
+  and enforced mechanically: a `forbidigo` rule in `.golangci.yml` fails the
+  lint gate (a required check on `main`) on any dynamic-client write method,
+  and `TestHandlersIssueOnlyReadVerbs`
+  drives every handler against the dynamic fake and asserts only `get`/`list`
+  actions were recorded.
 - A minimal read-only RBAC manifest ships in [`deploy/rbac.yaml`](./deploy/rbac.yaml):
   bind the RBAC-manager-maintained aggregated `crossplane-view` role (covers
   XRD/provider types automatically, and on a default install already includes
@@ -277,7 +282,11 @@ Large k8s objects wreck an LLM context. Defaults:
   are then out of reach — every `pkg.crossplane.io` kind is cluster-scoped,
   and events for cluster-scoped objects live in the `default` namespace).
 - No secrets in output by default (connection-secret *contents* are never
-  returned; presence/status only).
+  returned; presence/status only). Pinned by `TestSecretContentsNeverReturned`,
+  which fetches a core/v1 Secret both through `get_resource` and through the
+  tree walk and asserts no `data`/`stringData` reaches the response. Note the
+  precise scope: a Secret referenced by an XR *is* fetched like any other tree
+  node — the guarantee is about what leaves the process, not what it reads.
 
 ---
 

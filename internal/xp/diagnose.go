@@ -69,9 +69,11 @@ type Suspect struct {
 	// response as-is — identifiers like account IDs/ARNs are intentionally kept
 	// (often the actionable detail); in the --log-file the recorder's best-effort
 	// secret scrub applies but does not guarantee removal, so marking values
-	// sensitive in the Terraform/OpenTofu config remains the source of truth. The
-	// server never reads Secret objects. Empty when no hint is present or the
-	// blob cannot be decoded.
+	// sensitive in the Terraform/OpenTofu config remains the source of truth. A
+	// Secret composed by an XR is fetched during the tree walk like any other
+	// node, but a suspect carries only its metadata/conditions/events — never its
+	// data/stringData. Empty when no hint is present or the blob cannot be
+	// decoded.
 	DecodedErrors []string    `json:"decodedErrors,omitempty"`
 	Events        []k8s.Event `json:"events,omitempty"`
 }
