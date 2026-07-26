@@ -1,0 +1,151 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "nop.crossplane.io/v1alpha1",
+            "kind": "NopResource",
+            "metadata": {
+                "annotations": {
+                    "crossplane.io/composition-resource-name": "stuck-nop",
+                    "crossplane.io/external-name": "demo-7aedca33654a"
+                },
+                "creationTimestamp": "2026-07-26T04:45:34Z",
+                "finalizers": [
+                    "finalizer.managedresource.crossplane.io"
+                ],
+                "generateName": "demo-",
+                "generation": 1,
+                "labels": {
+                    "crossplane.io/composite": "demo"
+                },
+                "name": "demo-7aedca33654a",
+                "namespace": "default",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "example.org/v1alpha1",
+                        "blockOwnerDeletion": true,
+                        "controller": true,
+                        "kind": "XStuckApp",
+                        "name": "demo",
+                        "uid": "6d0b1862-3718-432d-8e39-5c0875cbf690"
+                    }
+                ],
+                "resourceVersion": "922",
+                "uid": "5a38904d-db46-4fa9-83c8-03a02bc078db"
+            },
+            "spec": {
+                "deletionPolicy": "Delete",
+                "forProvider": {
+                    "conditionAfter": [
+                        {
+                            "conditionStatus": "False",
+                            "conditionType": "Ready",
+                            "time": "0s"
+                        }
+                    ]
+                },
+                "managementPolicies": [
+                    "*"
+                ],
+                "providerConfigRef": {
+                    "name": "default"
+                }
+            },
+            "status": {
+                "atProvider": {},
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:34Z",
+                        "observedGeneration": 1,
+                        "reason": "ReconcileSuccess",
+                        "status": "True",
+                        "type": "Synced"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:34Z",
+                        "observedGeneration": 1,
+                        "reason": "",
+                        "status": "False",
+                        "type": "Ready"
+                    }
+                ]
+            }
+        },
+        {
+            "apiVersion": "nop.crossplane.io/v1alpha1",
+            "kind": "NopResource",
+            "metadata": {
+                "annotations": {
+                    "crossplane.io/composition-resource-name": "stuck-nop",
+                    "crossplane.io/external-name": "legacy-demo-7g7wt-514c140666ee"
+                },
+                "creationTimestamp": "2026-07-26T04:45:36Z",
+                "finalizers": [
+                    "finalizer.managedresource.crossplane.io"
+                ],
+                "generateName": "legacy-demo-7g7wt-",
+                "generation": 1,
+                "labels": {
+                    "crossplane.io/claim-name": "legacy-demo",
+                    "crossplane.io/claim-namespace": "default",
+                    "crossplane.io/composite": "legacy-demo-7g7wt"
+                },
+                "name": "legacy-demo-7g7wt-514c140666ee",
+                "namespace": "default",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "legacy.example.org/v1alpha1",
+                        "blockOwnerDeletion": true,
+                        "controller": true,
+                        "kind": "XLegacyApp",
+                        "name": "legacy-demo-7g7wt",
+                        "uid": "bc33fe57-fb70-4b12-b110-826a6db4da1b"
+                    }
+                ],
+                "resourceVersion": "970",
+                "uid": "4efa7afe-3850-4e27-bd6f-dc5bffe75316"
+            },
+            "spec": {
+                "deletionPolicy": "Delete",
+                "forProvider": {
+                    "conditionAfter": [
+                        {
+                            "conditionStatus": "False",
+                            "conditionType": "Ready",
+                            "time": "0s"
+                        }
+                    ]
+                },
+                "managementPolicies": [
+                    "*"
+                ],
+                "providerConfigRef": {
+                    "name": "default"
+                }
+            },
+            "status": {
+                "atProvider": {},
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:36Z",
+                        "observedGeneration": 1,
+                        "reason": "ReconcileSuccess",
+                        "status": "True",
+                        "type": "Synced"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:37Z",
+                        "observedGeneration": 1,
+                        "reason": "",
+                        "status": "False",
+                        "type": "Ready"
+                    }
+                ]
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}
