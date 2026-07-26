@@ -93,6 +93,15 @@ func TestCrossplaneV2NamespacedXR(t *testing.T) {
 		t.Errorf("the top suspect must explain itself: %s/%s state=%s\nconditions as stored: %s",
 			top.Kind, top.Name, nodeState(d, top.Kind, top.Name), describeStored(cl, top))
 	}
+	// Logged on SUCCESS too, deliberately. This tier's job is to notice when
+	// upstream changes the shape of what it writes, and a passing run that
+	// records nothing cannot do that. It also settles which shape the original
+	// empty-Reasons failure was: a synthetic "(reported with no reason or
+	// message)" lead means the provider writes bare conditions, while real
+	// condition text means it does not and the earlier failure was the
+	// wait-for-existence race that this workflow no longer has.
+	t.Logf("top suspect %s/%s reasons: %q", top.Kind, top.Name, top.Reasons)
+	t.Logf("as stored: %s", describeStored(cl, top))
 }
 
 // nodeState reads the state off the flat tree entry behind a suspect.
