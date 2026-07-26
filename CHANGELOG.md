@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/briferz/crossplane-mcp/compare/v0.8.0...v0.8.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* **e2e:** put the LegacyCluster XRD on the v1 API, where it exists ([#58](https://github.com/briferz/crossplane-mcp/issues/58)) ([3a522ee](https://github.com/briferz/crossplane-mcp/commit/3a522eebef06f39e75eaca61e183ed92e298c21b))
+* never ship a suspect that explains nothing ([#60](https://github.com/briferz/crossplane-mcp/issues/60)) ([d9e94bf](https://github.com/briferz/crossplane-mcp/commit/d9e94bf7160d0d309673df5ad96425260c71dfb4))
+
 ## [0.8.0](https://github.com/briferz/crossplane-mcp/compare/v0.7.0...v0.8.0) (2026-07-25)
 
 
