@@ -129,6 +129,39 @@ jobs:
           CROSSPLANE_E2E: "1"
         run: go -C test/e2e test ./... -run ReadOnlyAgainstRealCluster -v -timeout 5m
 
+      # Export the objects upstream ACTUALLY wrote, for use as unit testdata.
+      # The reason this exists: a hand-written fixture encodes what its author
+      # believes a provider emits, and this repo has now shipped one bug from
+      # exactly that gap — every fixture here set a condition reason, while real
+      # provider-nop writes Ready=False with neither reason nor message, so the
+      # top-ranked suspect came back with no explanation and no unit test could
+      # have caught it. Golden objects captured from a live cluster let the fast
+      # per-PR suite run against real shapes instead of imagined ones.
+      #
+      # Runs on success only: fixtures captured from a broken cluster would
+      # enshrine the breakage as the expected shape.
+      - name: export golden fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/golden
+          kubectl get xstuckapps.example.org demo -n default -o json > /tmp/golden/v2-xr.json
+          kubectl get legacyappclaims.legacy.example.org legacy-demo -n default -o json \
+            > /tmp/golden/v1-claim.json
+          kubectl get xlegacyapps.legacy.example.org -o json > /tmp/golden/v1-xr-list.json
+          kubectl get nopresources.nop.crossplane.io -A -o json > /tmp/golden/composed-list.json
+          kubectl get providers.pkg.crossplane.io,functions.pkg.crossplane.io -o json \
+            > /tmp/golden/packages-list.json
+          kubectl version -o json > /tmp/golden/versions.json
+          # The one line that matters most, echoed into the log so a reader sees
+          # the shape without downloading anything.
+          jq -r '.items[] | "\(.kind)/\(.metadata.name): \(.status.conditions // [] | map("\(.type)=\(.status) reason=\"\(.reason // "")\"") | join(" "))"' \
+            /tmp/golden/composed-list.json
+      - name: upload golden fixtures
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-fixtures
+          path: /tmp/golden
+
       # A failure a week after the fact is only actionable with the cluster's
       # own account of what happened.
       - name: collect diagnostics
