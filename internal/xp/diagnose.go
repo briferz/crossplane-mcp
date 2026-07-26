@@ -30,6 +30,59 @@ func causeMessages(n *Node) []string {
 	return n.nativeReasons
 }
 
+// bareStateMessages is the last resort before a suspect ships with nothing to
+// say at all. Two shapes reach it, and neither is reachable from a unit fixture
+// here, because those always write a reason or a message:
+//
+//   - a condition that is False or Unknown but carries NEITHER reason nor
+//     message. conditionLine renders that as "", so blockingMessages drops it
+//     and a genuinely blocked resource arrives with an empty explanation. A
+//     live cluster produced this shape (see the kind + Crossplane tier).
+//   - no conditions at all on a resource that is expected to have them, which
+//     Classify calls Pending precisely so a fresh MR cannot read as healthy.
+//
+// It is deliberately NOT part of causeMessages, and that placement is the whole
+// design. These lines state the ABSENCE of an explanation, so they must behave
+// like absence everywhere absence is load-bearing: attribute overrides to a
+// recurring composition event only when the lead is empty or a transport flake
+// (issue #24 P1), and a synthetic non-noise lead would silently defeat that
+// override — demoting a real recurring event, with its full message, to a bare
+// "Recurring event: R (xN)" suffix. So callers apply this only after event
+// attribution has had its say and produced nothing.
+//
+// The state gate is the other load-bearing part. A terminating resource that is
+// otherwise Ready is also a suspect, and both lines would be false about it: its
+// story is the lifecycle label and its finalizers. A native object in
+// StateUnknown was never assessed at all, and some native vocabularies are
+// False-when-healthy (a PodDisruptionBudget's DisruptionAllowed, a Node's
+// MemoryPressure), so naming a False condition there would invent a problem.
+func bareStateMessages(n *Node) []string {
+	// A node the walk could not fetch has no conditions because it was never
+	// read, not because nothing wrote them. Its explanation is unreachablePrefix
+	// plus the fetch error; asserting anything about the status of an object we
+	// never saw would be an invention, and it would displace the RBAC or
+	// NotFound text that is the actually useful answer.
+	if n.Error != "" {
+		return nil
+	}
+	if n.State != StateBlocked && n.State != StatePending {
+		return nil
+	}
+	var msgs []string
+	for _, c := range n.Conditions {
+		if c.Status == "False" || c.Status == "Unknown" {
+			msgs = append(msgs, c.Type+": "+c.Status+" (reported with no reason or message)")
+		}
+	}
+	if len(msgs) > 0 {
+		return msgs
+	}
+	if len(n.Conditions) == 0 && n.State == StatePending {
+		return []string{"no status conditions reported yet — nothing has written status for this resource"}
+	}
+	return nil
+}
+
 // unreachablePrefix labels a reason derived from a fetch failure rather than a
 // condition, so an agent can tell "this resource is broken" from "we could not
 // look at this resource".
@@ -243,6 +296,13 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		// insensitive and attribute is idempotent under it.
 		condMsgs := leadFirst(causeMessages(n))
 		s.Reasons = reasonsWithEvent(condMsgs, events)
+		// Only once conditions AND events have both produced nothing: name the
+		// bare state rather than shipping a suspect with an empty explanation.
+		// Applied here, not inside causeMessages, so it cannot pre-empt the
+		// recurring-event attribution above (see bareStateMessages).
+		if len(s.Reasons) == 0 {
+			s.Reasons = bareStateMessages(n)
+		}
 		// A node the walk never fetched has no conditions and no events, so the
 		// fetch error is the only explanation that exists. Without this the
 		// suspect is a bare kind/name with empty reasons — and error nodes are
@@ -282,6 +342,14 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// without this the headline names a suspect and then explains nothing.
 	if msg == "" && root.Error != "" {
 		msg = unreachablePrefix + root.Error
+	}
+	// Same last resort as the per-suspect path, and for the same reason: the
+	// headline must not name a root cause and then say nothing about it. After
+	// attribute, so a qualifying recurring event still wins when there is one.
+	if msg == "" {
+		if bare := bareStateMessages(root); len(bare) > 0 {
+			msg = bare[0]
+		}
 	}
 	if msg != "" {
 		d.Summary += " " + msg

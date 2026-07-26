@@ -37,23 +37,31 @@ import (
 
 var testEnv *envtest.Environment
 
-// This module serves two tiers that never run together:
+// This module serves three tiers that never run together:
 //
-//	envtest   (default)          apiserver + etcd, no controllers. Fast, runs
-//	                             on every PR. Needs KUBEBUILDER_ASSETS.
-//	crossplane (CROSSPLANE_E2E)  a real kind cluster with real Crossplane,
-//	                             driven through KUBECONFIG. Cron/dispatch only.
+//	envtest    (default)          apiserver + etcd, no controllers. Fast, runs
+//	                              on every PR. Needs KUBEBUILDER_ASSETS.
+//	cluster    (CLUSTER_E2E)      a real kind cluster with real controllers and
+//	                              a kubelet, but no Crossplane. One external
+//	                              image on its critical path.
+//	crossplane (CROSSPLANE_E2E)   the above plus real Crossplane, which adds
+//	                              three registries. Cron/dispatch/label only.
 //
 // Selecting by environment rather than build tags keeps one module, one
 // `go vet`, and no tag combination that compiles in CI but not locally.
 func crossplaneTier() bool { return os.Getenv("CROSSPLANE_E2E") == "1" }
 
-// requireEnvtest skips a test when the process is running the Crossplane tier,
-// where there is no envtest apiserver.
+// clusterTier reports whether a real cluster is driving the run. The Crossplane
+// tier is a superset — it necessarily has controllers and a kubelet — so it
+// implies this one rather than being a separate case every caller must handle.
+func clusterTier() bool { return os.Getenv("CLUSTER_E2E") == "1" || crossplaneTier() }
+
+// requireEnvtest skips a test when the process is running against a real
+// cluster, where there is no envtest apiserver.
 func requireEnvtest(t *testing.T) {
 	t.Helper()
 	if testEnv == nil {
-		t.Skip("envtest not started (CROSSPLANE_E2E tier)")
+		t.Skip("envtest not started (running a real-cluster tier)")
 	}
 }
 
@@ -66,8 +74,8 @@ func requireCrossplane(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	// The Crossplane tier brings its own cluster; envtest must not start.
-	if crossplaneTier() {
+	// A real-cluster tier brings its own cluster; envtest must not start.
+	if clusterTier() {
 		os.Exit(m.Run())
 	}
 

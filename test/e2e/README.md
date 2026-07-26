@@ -1,25 +1,34 @@
-# Integration tests (envtest)
+# Integration tests
 
-Runs `crossplane-mcp` against a **real kube-apiserver + etcd** — no kubelet, no
-controllers, no scheduler.
+Runs `crossplane-mcp` against real Kubernetes — how real depends on the tier.
 
 ```sh
 make e2e-envtest     # tier 1: resolves apiserver/etcd binaries, runs the suite (~11s)
-make e2e-crossplane  # tier 2: needs a real cluster with Crossplane installed
+make e2e-native      # tier 2: any real cluster (kind is enough); no Crossplane
+make e2e-crossplane  # tier 3: needs a real cluster with Crossplane installed
 make e2e-vet         # compile-check only (also part of `make check`)
 ```
 
-Two tiers live in this one module, selected by environment rather than build
+Three tiers live in this one module, selected by environment rather than build
 tags — one `go vet`, and no tag combination that compiles in CI but not locally:
 
-| | Selected by | Runs |
-|---|---|---|
-| **envtest** | default (needs `KUBEBUILDER_ASSETS`) | every PR, ~11s |
-| **Crossplane** | `CROSSPLANE_E2E=1` + `KUBECONFIG` | weekly cron, `workflow_dispatch`, or an `e2e` PR label |
+| | Selected by | Has | Runs |
+|---|---|---|---|
+| **envtest** | default (needs `KUBEBUILDER_ASSETS`) | apiserver + etcd | every PR, ~11s |
+| **native** | `CLUSTER_E2E=1` + a kubeconfig | + controllers, kubelet | weekly cron, `workflow_dispatch`, or an `e2e` PR label |
+| **Crossplane** | `CROSSPLANE_E2E=1` + a kubeconfig | + Crossplane | same triggers |
 
-Setting `CROSSPLANE_E2E=1` asserts a cluster exists; without one the tests fail
+They are ordered by how much can break underneath them. envtest depends on
+nothing external; native adds `kindest/node` and one pause image; Crossplane
+adds three registries nobody here controls. That ordering is why they are
+separate CI jobs — a marketplace outage should not obscure a native-readiness
+regression, and only the Crossplane tier is fragile enough to need that
+allowance.
+
+Setting either variable asserts a cluster exists; without one the tests fail
 rather than skip, because a silent skip is how a tier stops running and nobody
-notices.
+notices. `CROSSPLANE_E2E=1` implies `CLUSTER_E2E`, since a Crossplane cluster
+necessarily has controllers.
 
 ## Why this is a separate Go module
 
@@ -65,6 +74,25 @@ XRD-generated ones; if upstream changes that shape, this tier will not notice.
 
 That is the kind + real-Crossplane tier's job, and the reason it exists
 separately.
+
+## The native tier (`CLUSTER_E2E=1`)
+
+`internal/xp/native.go` encodes how upstream controllers write readiness into
+status — per `(group, kind)`, never a polarity heuristic. Its unit tests assert
+against conditions **this repo authored**, so they prove the rules read their own
+fixtures back and nothing more. envtest cannot help: no kube-controller-manager
+means no Deployment controller, and no kubelet means no pod ever fails to start.
+
+| Test | What only real controllers can establish |
+|---|---|
+| `TestNativeReadinessDeploymentRolloutRecovery` | That `Progressing=False/ProgressDeadlineExceeded` is **transient**, not terminal. `deploymentReadiness` calls that pair Blocked with no "only if `Available != True`" guard — correctly, since a stuck rollout keeps serving under `maxSurge`. But if the controller never reset the condition, the same rule would strand a fully recovered Deployment at Blocked forever. The probe wedges a rollout, fixes it, and reads back what the controller actually did. |
+| `TestNativeReadinessSucceededPodIsReady` | That a real terminated pod still reports `Ready=False/PodCompleted`. This is the shape behind the live false positive `native.go` was written for — a finished init or migration Pod ranked as the top suspect, permanently. If Kubernetes ever changes it, the Pod rule silently stops applying. |
+
+The rollout probe is offline by construction on the failing half:
+`imagePullPolicy: Never` plus an image that cannot exist locally fails instantly
+with `ErrImageNeverPull` and touches no registry, so there is no pull backoff to
+race. The recovery half needs one real image; CI preloads it with `kind load
+docker-image`, and `PROBE_IMAGE` overrides it elsewhere.
 
 ## Fixtures
 

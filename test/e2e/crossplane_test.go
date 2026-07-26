@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ import (
 // hand-written to MIMIC XRD-generated ones — if upstream changes that shape,
 // envtest will happily keep passing. These assertions are the ones that break.
 
-func crossplaneClient(t *testing.T) *k8s.Client {
+func clusterClient(t *testing.T) *k8s.Client {
 	t.Helper()
 	kubeconfig := os.Getenv("KUBECONFIG")
 	cl, err := k8s.New(kubeconfig, "", 60*time.Second)
@@ -53,7 +54,7 @@ func diagnoseFor(t *testing.T, cl *k8s.Client, apiVersion, kind, ns, name string
 // targets: a namespaced XR whose composed refs live under spec.crossplane.
 func TestCrossplaneV2NamespacedXR(t *testing.T) {
 	requireCrossplane(t)
-	cl := crossplaneClient(t)
+	cl := clusterClient(t)
 
 	d := diagnoseFor(t, cl, "example.org/v1alpha1", "XStuckApp", "default", "demo")
 
@@ -76,9 +77,65 @@ func TestCrossplaneV2NamespacedXR(t *testing.T) {
 			"ranking no longer surfaces the deepest failing resource",
 			top.Kind, top.Name, top.Depth)
 	}
+	// A suspect that names itself and then explains nothing is the complaint this
+	// tool exists to answer, and this assertion caught a real one against a live
+	// cluster — the composed NopResource ranked top with an empty Reasons list.
+	//
+	// Two shapes produce that and the run could not tell them apart, because the
+	// object was not in the artifact: a condition that is False but carries
+	// neither reason nor message (conditionLine renders it "", so
+	// blockingMessages drops it), or no conditions at all because the provider
+	// had not reconciled yet. diagnose.go now explains both; the workflow now
+	// collects the composed objects and waits for status, so a recurrence names
+	// which one it was. Printing the conditions here is the third leg of that —
+	// this tier runs weekly and nobody will still have the cluster.
 	if len(top.Reasons) == 0 {
-		t.Error("the top suspect must explain itself")
+		t.Errorf("the top suspect must explain itself: %s/%s state=%s\nconditions as stored: %s",
+			top.Kind, top.Name, nodeState(d, top.Kind, top.Name), describeStored(cl, top))
 	}
+	// Logged on SUCCESS too, deliberately. This tier's job is to notice when
+	// upstream changes the shape of what it writes, and a passing run that
+	// records nothing cannot do that. It also settles which shape the original
+	// empty-Reasons failure was: a synthetic "(reported with no reason or
+	// message)" lead means the provider writes bare conditions, while real
+	// condition text means it does not and the earlier failure was the
+	// wait-for-existence race that this workflow no longer has.
+	t.Logf("top suspect %s/%s reasons: %q", top.Kind, top.Name, top.Reasons)
+	t.Logf("as stored: %s", describeStored(cl, top))
+}
+
+// nodeState reads the state off the flat tree entry behind a suspect.
+func nodeState(d *xp.Diagnosis, kind, name string) string {
+	for _, n := range d.Tree {
+		if n.Kind == kind && n.Name == name {
+			return n.State
+		}
+	}
+	return "<not in tree>"
+}
+
+// describeStored re-reads the suspect from the cluster and renders its raw
+// conditions. FlatNode does not carry conditions and Suspect carries only the
+// derived reasons — which is exactly the information missing when the derivation
+// is what is suspect.
+func describeStored(cl *k8s.Client, s xp.Suspect) string {
+	target, err := cl.Resolve(s.APIVersion, s.Kind)
+	if err != nil {
+		return fmt.Sprintf("<resolve failed: %v>", err)
+	}
+	obj, err := cl.Get(context.Background(), target, s.Namespace, s.Name)
+	if err != nil {
+		return fmt.Sprintf("<get failed: %v>", err)
+	}
+	conds := xp.Conditions(obj)
+	if len(conds) == 0 {
+		return "<no status conditions at all>"
+	}
+	var out string
+	for _, c := range conds {
+		out += fmt.Sprintf("[%s=%s reason=%q message=%q] ", c.Type, c.Status, c.Reason, c.Message)
+	}
+	return out
 }
 
 // TestCrossplaneV1ClaimAndClusterScopedXR covers the other half of hard rule 2:
@@ -86,7 +143,7 @@ func TestCrossplaneV2NamespacedXR(t *testing.T) {
 // resources (spec.resourceRefs). Nothing in the v2 fixture reaches this path.
 func TestCrossplaneV1ClaimAndClusterScopedXR(t *testing.T) {
 	requireCrossplane(t)
-	cl := crossplaneClient(t)
+	cl := clusterClient(t)
 
 	d := diagnoseFor(t, cl, "legacy.example.org/v1alpha1", "LegacyAppClaim", "default", "legacy-demo")
 
@@ -115,7 +172,7 @@ func TestCrossplaneV1ClaimAndClusterScopedXR(t *testing.T) {
 // over `crossplane resource trace`.
 func TestCrossplaneConditionMessagesNotTruncated(t *testing.T) {
 	requireCrossplane(t)
-	cl := crossplaneClient(t)
+	cl := clusterClient(t)
 
 	d := diagnoseFor(t, cl, "example.org/v1alpha1", "XStuckApp", "default", "demo")
 	for _, s := range d.Suspects {
@@ -133,7 +190,7 @@ func TestCrossplaneConditionMessagesNotTruncated(t *testing.T) {
 // version actually emits.
 func TestCrossplanePackagesHealthy(t *testing.T) {
 	requireCrossplane(t)
-	cl := crossplaneClient(t)
+	cl := clusterClient(t)
 
 	// The package tools discover by CATEGORY (pkg / pkgrev), not by hardcoded
 	// group-version — deliberately, so Function@v1beta1 clusters work without
@@ -162,7 +219,7 @@ func TestCrossplanePackagesHealthy(t *testing.T) {
 // against a live apiserver across the tools' real code paths.
 func TestReadOnlyAgainstRealCluster(t *testing.T) {
 	requireCrossplane(t)
-	cl := crossplaneClient(t)
+	cl := clusterClient(t)
 
 	before := resourceVersions(t, cl)
 	_ = diagnoseFor(t, cl, "example.org/v1alpha1", "XStuckApp", "default", "demo")
