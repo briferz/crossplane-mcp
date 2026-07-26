@@ -1,0 +1,66 @@
+{
+    "apiVersion": "example.org/v1alpha1",
+    "kind": "XStuckApp",
+    "metadata": {
+        "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"example.org/v1alpha1\",\"kind\":\"XStuckApp\",\"metadata\":{\"annotations\":{},\"name\":\"demo\",\"namespace\":\"default\"},\"spec\":{\"message\":\"deliberately stuck for diagnose validation\"}}\n"
+        },
+        "creationTimestamp": "2026-07-26T04:45:34Z",
+        "finalizers": [
+            "composite.apiextensions.crossplane.io"
+        ],
+        "generation": 4,
+        "labels": {
+            "crossplane.io/composite": "demo"
+        },
+        "name": "demo",
+        "namespace": "default",
+        "resourceVersion": "927",
+        "uid": "6d0b1862-3718-432d-8e39-5c0875cbf690"
+    },
+    "spec": {
+        "crossplane": {
+            "compositionRef": {
+                "name": "xstuckapps.example.org"
+            },
+            "compositionRevisionRef": {
+                "name": "xstuckapps.example.org-7b9722d"
+            },
+            "compositionUpdatePolicy": "Automatic",
+            "resourceRefs": [
+                {
+                    "apiVersion": "nop.crossplane.io/v1alpha1",
+                    "kind": "NopResource",
+                    "name": "demo-7aedca33654a"
+                }
+            ]
+        },
+        "message": "deliberately stuck for diagnose validation"
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-07-26T04:45:34Z",
+                "observedGeneration": 4,
+                "reason": "ReconcileSuccess",
+                "status": "True",
+                "type": "Synced"
+            },
+            {
+                "lastTransitionTime": "2026-07-26T04:45:34Z",
+                "message": "Unready resources: stuck-nop",
+                "observedGeneration": 4,
+                "reason": "Creating",
+                "status": "False",
+                "type": "Ready"
+            },
+            {
+                "lastTransitionTime": "2026-07-26T04:45:34Z",
+                "observedGeneration": 4,
+                "reason": "WatchCircuitClosed",
+                "status": "True",
+                "type": "Responsive"
+            }
+        ]
+    }
+}

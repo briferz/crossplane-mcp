@@ -2,13 +2,20 @@ package xp
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+// Embedded rather than read from disk: the fixtures are then independent of the
+// test's working directory, and there is no runtime file read taking a computed
+// path for gosec to object to.
+//
+//go:embed testdata/golden/*.json
+var goldenFS embed.FS
 
 // Golden objects captured verbatim from a real cluster by the kind + Crossplane
 // tier (see .github/workflows/e2e.yml, "export golden fixtures").
@@ -37,7 +44,7 @@ const goldenDir = "testdata/golden"
 // the capture used `get <name>` or `get <kind> -A`.
 func loadGolden(t *testing.T) []*unstructured.Unstructured {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(goldenDir, "*.json"))
+	paths, err := fs.Glob(goldenFS, goldenDir+"/*.json")
 	if err != nil {
 		t.Fatalf("globbing golden fixtures: %v", err)
 	}
@@ -49,7 +56,7 @@ func loadGolden(t *testing.T) []*unstructured.Unstructured {
 
 	var out []*unstructured.Unstructured
 	for _, p := range paths {
-		raw, err := os.ReadFile(p)
+		raw, err := goldenFS.ReadFile(p)
 		if err != nil {
 			t.Fatalf("reading %s: %v", p, err)
 		}
