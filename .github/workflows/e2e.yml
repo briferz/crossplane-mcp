@@ -236,6 +236,11 @@ jobs:
       - name: open or update the tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # REQUIRED — see the identical note in ci.yml. This job runs no
+          # actions/checkout, so `gh` has no git remote to infer the repo from
+          # and exits 1 before doing anything. Both notifiers carried the same
+          # defect and neither had ever run to completion.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TITLE: "Scheduled E2E (kind) is failing"
         run: |

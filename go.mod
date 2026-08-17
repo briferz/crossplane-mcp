@@ -8,7 +8,10 @@ go 1.26.4
 // resolve Go via setup-go's `go-version-file: go.mod`, so without this line they
 // build with exactly 1.26.4 and never pick up stdlib security fixes.
 // Bump this when govulncheck reports a stdlib advisory (see GO-2026-5856).
-toolchain go1.26.5
+// 1.26.6 closes four reachable stdlib advisories reported on 2026-08-17:
+// GO-2026-6218 (net/url), GO-2026-6090 (crypto/tls), GO-2026-5972
+// (encoding/asn1), GO-2026-5026 (net/http).
+toolchain go1.26.6
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
