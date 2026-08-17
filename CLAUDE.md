@@ -28,7 +28,9 @@ make build        # bin/crossplane-mcp
 make test         # go test -race + coverage (no cluster needed)
 make lint         # golangci-lint
 make vulncheck    # govulncheck
-make e2e-envtest  # integration suite vs a real kube-apiserver (test/e2e)
+make e2e-envtest  # tier 1: vs a real kube-apiserver + etcd (test/e2e)
+make e2e-native   # tier 2: any real cluster with controllers; no Crossplane
+make e2e-crossplane # tier 3: a real cluster with Crossplane installed
 make check        # fmt-check + vet + lint + test + e2e-vet + vulncheck (mirrors CI)
 ```
 
@@ -43,7 +45,20 @@ load-bearing: a `//go:build` tag would still pull `controller-runtime` into the
 in tagged files), and the harness *must* write while the server must not — the
 module boundary is what lets the `forbidigo` read-only rule keep its exact
 semantics with **no exclusion and no `//nolint`**. Keep `ENVTEST_K8S_VERSION` in
-step with the `client-go` minor. See `test/e2e/README.md`.
+step with the `client-go` minor.
+
+That module now serves **three** tiers, selected by environment rather than
+build tags (one `go vet`, no tag combination that compiles in CI but not
+locally) — `make e2e-envtest` / `e2e-native` / `e2e-crossplane`. They are
+ordered by how much can break underneath them: envtest reaches no network at run
+time (setup-envtest fetches the apiserver/etcd binaries beforehand),
+`CLUSTER_E2E` (native readiness: real controllers and kubelet, no Crossplane)
+adds `kindest/node` and one pause image, `CROSSPLANE_E2E` adds three registries
+nobody here controls. That ordering is why they are separate
+CI jobs — a marketplace outage must not obscure a native-readiness regression.
+Setting either variable asserts a cluster exists: the tests then fail rather
+than skip, because a silent skip is how a tier stops running and nobody
+notices. See `test/e2e/README.md`.
 
 - **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`**.
   A prebuilt golangci-lint binary built with an older Go *refuses* this module
@@ -90,12 +105,48 @@ step with the `client-go` minor. See `test/e2e/README.md`.
 - **Conventional Commits are required** — release-please parses them to compute
   versions and the changelog. Use `feat:`, `fix:`, `docs:`, `ci:`, `chore:`,
   `refactor:`, etc. Breaking changes: `feat!:` or a `BREAKING CHANGE:` footer.
+- **The squash subject is what release-please parses — not the PR title, and not
+  the branch's commits.** An unrecognised type is dropped SILENTLY: the release
+  workflow still succeeds, and the release PR is simply never updated. Writing
+  `deps:` (not a Conventional Commits type) when squash-merging a Dependabot PR
+  cost a whole extra PR to recover the missing changelog entry, and the only
+  symptom was a release PR whose `updatedAt` never moved. **After squash-merging
+  anything that should appear in the changelog, check that the release PR
+  actually changed** — a green release workflow does not mean it did.
+  - Dependabot's default `build(deps):` is correct, and `build` is hidden from
+    the changelog by release-please's defaults (this repo sets no
+    `changelog-sections`) — fine, since bumping `actions/checkout` changes
+    nothing for a user. Use `fix(deps):` when a bump changes *shipped*
+    behaviour (e.g. the go-sdk v1.7.0 bump, which changed the negotiated MCP
+    protocol).
 - **Pre-1.0 (`0.x`) versioning:** `feat:` and breaking changes bump the **minor**,
   `fix:` bumps the **patch** (configured in `release-please-config.json`).
 - **`main` is protected** by a ruleset: required status checks (`build & test`,
   `golangci-lint`, `govulncheck`), **signed commits**, linear history, PR-only.
-  Locally-authored (unsigned) commits need `gh pr merge --admin`; release-please
-  and Dependabot commits are GitHub-signed and merge normally.
+- **The signed-commits rule is evaluated on the PR's BRANCH commits, not on the
+  merge result.** This distinction hides itself: GitHub signs the squash commit
+  it creates, so `main`'s history reads `verified=true` for every release even
+  when the branch commit was unsigned. Checking `main` therefore tells you
+  nothing about whether a merge will be allowed. Check the branch:
+  `gh api repos/briferz/crossplane-mcp/pulls/N/commits --jq '.[].commit.verification'`.
+  - Locally-authored commits are unsigned here, so they need `--admin`.
+  - **Dependabot's own commits ARE signed** (`verified=true`,
+    `author=dependabot[bot]` — checked on #56), so a pure Dependabot PR should
+    merge normally. Pushing your own commit onto its branch makes the branch
+    unsigned and reintroduces `--admin`, which is why #62 needed it.
+  - **release-please's branch commit is NOT signed**, and is attributed to a
+    human account rather than a bot — checked on the 0.8.1 release PR, where a
+    plain `gh pr merge` was rejected with *"the base branch policy prohibits the
+    merge"* and `--admin` was required. This file previously claimed release PRs
+    "merge normally"; that survived four releases because only the signed result
+    on `main` had ever been looked at. `release.yml` authenticates with a PAT,
+    which explains the human *attribution*; it does not by itself explain the
+    missing signature, since GitHub does sign commits made through some API
+    paths under PAT auth. What the unsigned result shows is only that
+    release-please is not creating the commit through a path GitHub auto-signs
+    — **which path, and whether to change it, is an open question worth
+    settling**, since this also makes release commits indistinguishable from
+    hand-authored ones.
 - Keep PRs focused; run `make check` before pushing.
 
 ## Releases — do NOT hand-edit these
@@ -243,5 +294,63 @@ See README "Releasing".
   `TestNativeVerdictsAlwaysExplained`. `Classify`'s signature is unchanged, and
   `BuildUnhealthy` deliberately stays on it: `k8s.ProjectTriageFields` drops
   `spec` and `status.phase`, so object-aware classification is unavailable there.
+- **A suspect always explains itself** (`internal/xp/diagnose.go`
+  `bareStateMessages`): real Crossplane writes `Ready=False` with **neither
+  reason nor message** beside a fully-populated `Synced=True/ReconcileSuccess`.
+  `conditionLine` renders the bare one as `""`, so `blockingMessages` dropped it
+  and the top-ranked suspect arrived with empty `reasons`. No fixture here had
+  ever written that shape — a fixture author always supplies a reason — which is
+  why the whole unit suite passed while the live tier failed on its first run;
+  `signals_test.go` now encodes it deliberately.
+  Three guards, each pinned by a test that fails without it: `n.Error != ""`
+  returns nil (an unreachable node has no conditions because it was never
+  *read*, so "nothing has written status" is a claim about an object nobody
+  looked at — note it **fabricates a line rather than losing one**: the fetch
+  error is prepended after this runs, and chosen ahead of it in the summary, so
+  `unreachable:` leads either way); a Blocked/Pending state gate (a
+  terminating-but-Ready suspect's story is its lifecycle label, and `False` is
+  the normal, non-failing value for `DisruptionAllowed` / `MemoryPressure`);
+  and — **load-bearing** — it is applied only AFTER
+  `attribute`/`reasonsWithEvent`, never inside `causeMessages`. These lines state
+  the *absence* of an explanation, so they must behave like absence: `attribute`
+  overrides to a recurring composition event only when the lead is empty or a
+  transport flake (issue #24 P1), and a synthetic non-noise lead silently
+  defeats that, demoting a real recurring event **with its full message** to a
+  bare `Recurring event: R (xN)` suffix.
+- **Golden fixtures** (`internal/xp/testdata/golden/`, embedded): objects
+  captured verbatim from a live cluster by the Crossplane tier's *export golden
+  fixtures* step. Every other fixture in `internal/xp` encodes what its author
+  believed a provider emits, which is exactly why the whole unit suite passed
+  while the live tier failed on its first real run. Reverting
+  `bareStateMessages` now fails here in 0.5s with no cluster.
+  `TestGoldenStillCoversBareConditions` fails if a re-capture no longer contains
+  a bare condition — without it the coverage could evaporate while staying
+  green. Both refuse to pass vacuously (empty fixture set, or no object
+  classifying as a suspect, is a hard failure).
+- **Protocol-level promises are pinned end to end** (`cmd/crossplane-mcp/
+  main_test.go`): the read-only `Instructions` and every tool's `readOnlyHint`
+  are only true if they survive the handshake — setting a field is not the
+  promise, the client receiving it is. `newServer` is extracted from `main`
+  purely so a test can drive the real thing. Relevant now because go-sdk v1.7.0
+  negotiates protocol `2026-07-28`, which **replaces the initialize handshake
+  with `server/discover`**; its seven `MCPGODEBUG` compatibility escape hatches
+  are all scheduled for removal in **v1.9.0**, so that is the bump to watch.
+- The native-readiness tier settled the open question behind
+  `deploymentReadiness`: `ProgressDeadlineExceeded` is **transient**, not
+  terminal. Against a live controller a wedged rollout goes
+  `Progressing=False/ProgressDeadlineExceeded`, and once fixed returns to
+  `Progressing=True/NewReplicaSetAvailable` — so the rule is correct as shipped
+  and does not strand a recovered Deployment at Blocked.
+- **Recurring failure mode: a check that reports success while being
+  structurally unable to report failure.** Seen in an `e2e` label nobody had
+  created (so its trigger could never fire), a `Stats.Nodes >= 3` assertion
+  satisfied by an *unreachable* node while the fixture had never composed, and
+  both failure notifiers exiting before doing anything for want of a repo.
+  **Make a check fail on purpose before trusting it** — including the ones in
+  CI and tooling, where the slow feedback loop hides this for weeks.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).
+- Open decisions (asked, unanswered): promote the native tier to per-PR (its
+  assertions take ~22s but the job is ~2.5min wall including cluster creation;
+  one external image; guards shipped `internal/xp` logic)? promote `integration`
+  to a required check now it has burned in?
