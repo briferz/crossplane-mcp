@@ -131,6 +131,15 @@ jobs:
       - name: open or update the tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # REQUIRED. This job deliberately has no actions/checkout — it needs no
+          # source — but without a git remote `gh` cannot infer which repo to act
+          # on and every command dies with:
+          #   failed to run git: fatal: not a git repository
+          # That is not hypothetical: it is why this notifier never fired once
+          # between being added and 2026-08-17, including the run that found four
+          # stdlib CVEs. A notifier that fails silently is worse than none, since
+          # its presence is taken as coverage.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TITLE: "Scheduled CI is failing on main"
         run: |
