@@ -1,0 +1,78 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "legacy.example.org/v1alpha1",
+            "kind": "XLegacyApp",
+            "metadata": {
+                "creationTimestamp": "2026-07-26T04:45:36Z",
+                "finalizers": [
+                    "composite.apiextensions.crossplane.io"
+                ],
+                "generation": 4,
+                "labels": {
+                    "crossplane.io/claim-name": "legacy-demo",
+                    "crossplane.io/claim-namespace": "default",
+                    "crossplane.io/composite": "legacy-demo-7g7wt"
+                },
+                "name": "legacy-demo-7g7wt",
+                "resourceVersion": "963",
+                "uid": "bc33fe57-fb70-4b12-b110-826a6db4da1b"
+            },
+            "spec": {
+                "claimRef": {
+                    "apiVersion": "legacy.example.org/v1alpha1",
+                    "kind": "LegacyAppClaim",
+                    "name": "legacy-demo",
+                    "namespace": "default"
+                },
+                "compositionRef": {
+                    "name": "xlegacyapps.legacy.example.org"
+                },
+                "compositionRevisionRef": {
+                    "name": "xlegacyapps.legacy.example.org-2b8916e"
+                },
+                "compositionUpdatePolicy": "Automatic",
+                "message": "deliberately stuck, v1/LegacyCluster shape",
+                "resourceRefs": [
+                    {
+                        "apiVersion": "nop.crossplane.io/v1alpha1",
+                        "kind": "NopResource",
+                        "name": "legacy-demo-7g7wt-514c140666ee",
+                        "namespace": "default"
+                    }
+                ]
+            },
+            "status": {
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:36Z",
+                        "observedGeneration": 4,
+                        "reason": "ReconcileSuccess",
+                        "status": "True",
+                        "type": "Synced"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:36Z",
+                        "message": "Unready resources: stuck-nop",
+                        "observedGeneration": 4,
+                        "reason": "Creating",
+                        "status": "False",
+                        "type": "Ready"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:36Z",
+                        "observedGeneration": 4,
+                        "reason": "WatchCircuitClosed",
+                        "status": "True",
+                        "type": "Responsive"
+                    }
+                ]
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

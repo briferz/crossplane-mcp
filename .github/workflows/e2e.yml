@@ -111,13 +111,27 @@ jobs:
           # Synced-only instant would classify the NopResource healthy and flunk
           # the top-suspect assertion for a reason that has nothing to do with
           # the code under test.
-          for i in $(seq 1 60); do
+          # This loop MUST fail when it times out rather than falling through.
+          # It used to just exhaust: the v1 composition was erroring, only one
+          # of the two composed resources ever appeared, and the run carried on
+          # to assertions that passed anyway — because an unresolvable ref still
+          # counts as a walked node. A wait that gives up quietly turns a broken
+          # fixture into a green run.
+          ok=0
+          for _ in $(seq 1 60); do
             n=$(kubectl get nopresources.nop.crossplane.io -A -o json 2>/dev/null \
                   | jq '[.items[] | select(.status.conditions // [] | any(.type == "Ready"))] | length')
-            [ "${n:-0}" -ge 2 ] && break
+            if [ "${n:-0}" -ge 2 ]; then ok=1; break; fi
             sleep 5
           done
           kubectl get nopresources.nop.crossplane.io -A
+          if [ "$ok" != 1 ]; then
+            echo "::error::only ${n:-0} of 2 composed NopResources became ready."
+            echo "Both XRs and their Synced conditions (the composition error, if any):"
+            kubectl get xstuckapps,xlegacyapps -A \
+              -o custom-columns='KIND:.kind,NAME:.metadata.name,SYNCED:.status.conditions[?(@.type=="Synced")].message'
+            exit 1
+          fi
 
       - name: run the diagnostic suite against the cluster
         env:
@@ -128,6 +142,39 @@ jobs:
         env:
           CROSSPLANE_E2E: "1"
         run: go -C test/e2e test ./... -run ReadOnlyAgainstRealCluster -v -timeout 5m
+
+      # Export the objects upstream ACTUALLY wrote, for use as unit testdata.
+      # The reason this exists: a hand-written fixture encodes what its author
+      # believes a provider emits, and this repo has now shipped one bug from
+      # exactly that gap — every fixture here set a condition reason, while real
+      # provider-nop writes Ready=False with neither reason nor message, so the
+      # top-ranked suspect came back with no explanation and no unit test could
+      # have caught it. Golden objects captured from a live cluster let the fast
+      # per-PR suite run against real shapes instead of imagined ones.
+      #
+      # Runs on success only: fixtures captured from a broken cluster would
+      # enshrine the breakage as the expected shape.
+      - name: export golden fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/golden
+          kubectl get xstuckapps.example.org demo -n default -o json > /tmp/golden/v2-xr.json
+          kubectl get legacyappclaims.legacy.example.org legacy-demo -n default -o json \
+            > /tmp/golden/v1-claim.json
+          kubectl get xlegacyapps.legacy.example.org -o json > /tmp/golden/v1-xr-list.json
+          kubectl get nopresources.nop.crossplane.io -A -o json > /tmp/golden/composed-list.json
+          kubectl get providers.pkg.crossplane.io,functions.pkg.crossplane.io -o json \
+            > /tmp/golden/packages-list.json
+          kubectl version -o json > /tmp/golden/versions.json
+          # The one line that matters most, echoed into the log so a reader sees
+          # the shape without downloading anything.
+          jq -r '.items[] | "\(.kind)/\(.metadata.name): \(.status.conditions // [] | map("\(.type)=\(.status) reason=\"\(.reason // "")\"") | join(" "))"' \
+            /tmp/golden/composed-list.json
+      - name: upload golden fixtures
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-fixtures
+          path: /tmp/golden
 
       # A failure a week after the fact is only actionable with the cluster's
       # own account of what happened.
@@ -224,46 +271,25 @@ jobs:
   # ci.yml's notifier only watches ci.yml. Without this, a red weekly e2e run is
   # exactly as invisible as the red govulncheck run that sat unnoticed for 11
   # days — the failure mode this repo has already had once.
+  # Delegates to the shared implementation — see the note in ci.yml. The kind
+  # jobs are two, so this fires if either goes red.
   notify-scheduled-failure:
     name: notify on scheduled failure
     needs: [kind, native]
     if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
-    steps:
-      - name: open or update the tracking issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # REQUIRED — see the identical note in ci.yml. This job runs no
-          # actions/checkout, so `gh` has no git remote to infer the repo from
-          # and exits 1 before doing anything. Both notifiers carried the same
-          # defect and neither had ever run to completion.
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TITLE: "Scheduled E2E (kind) is failing"
-        run: |
-          set -euo pipefail
-          body=$(printf '%s\n' \
-            "The weekly kind e2e run failed. Check the run to see which job:" \
-            "" \
-            "Run: ${RUN_URL} (cluster logs are attached to it as an artifact)" \
-            "" \
-            "kind + Crossplane — most likely a package version drifted on the" \
-            "marketplace or the chart changed; only 'upstream moved composed refs'" \
-            "is a bug in this repo. Check the artifact before assuming." \
-            "" \
-            "kind (native readiness) — far more likely to be real. Its only external" \
-            "dependencies are kindest/node and the pause image, so a failure here" \
-            "usually means upstream changed how a controller writes status and" \
-            "internal/xp/native.go encodes the old shape." \
-            "" \
-            "This issue is reused rather than reopened weekly.")
-          existing=$(gh issue list --state open --json number,title \
-            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
-          if [ -n "${existing}" ]; then
-            gh issue comment "${existing}" --body "${body}"
-          else
-            gh issue create --title "${TITLE}" --body "${body}"
-          fi
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      title: "Scheduled E2E (kind) is failing"
+      intro: >-
+        The weekly kind e2e run failed; check the run to see which job. For
+        `kind + Crossplane`, the likely cause is a package version drifting on
+        the marketplace or a chart change — only "upstream moved composed refs"
+        is a bug in this repo, so check the artifact before assuming. For
+        `kind (native readiness)`, a failure is far more likely to be real: its
+        only external dependencies are kindest/node and the pause image, so it
+        usually means upstream changed how a controller writes status while
+        internal/xp/native.go still encodes the old shape.
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

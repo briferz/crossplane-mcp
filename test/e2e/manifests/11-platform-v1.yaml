@@ -67,6 +67,21 @@ spec:
             base:
               apiVersion: nop.crossplane.io/v1alpha1
               kind: NopResource
+              # REQUIRED, and its absence is not a compile-time error — it is a
+              # runtime composition failure that leaves the XR referencing a
+              # resource that never gets created:
+              #
+              #   cannot compose resources: cannot get existing composed
+              #   resources: cannot get composed resource: an empty namespace
+              #   may not be set when a resource name is provided
+              #
+              # Under Crossplane v2, provider-nop's NopResource is NAMESPACED.
+              # This XR is cluster-scoped (scope: LegacyCluster), so nothing
+              # supplies a namespace by default and the composed resource cannot
+              # be addressed. The v2 fixture never hits this because a namespaced
+              # XR composes into its own namespace.
+              metadata:
+                namespace: default
               spec:
                 forProvider:
                   # Same signature failure as the v2 fixture: reconciles
