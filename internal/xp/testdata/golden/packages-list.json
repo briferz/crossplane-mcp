@@ -1,0 +1,105 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "pkg.crossplane.io/v1",
+            "kind": "Provider",
+            "metadata": {
+                "annotations": {
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"pkg.crossplane.io/v1\",\"kind\":\"Provider\",\"metadata\":{\"annotations\":{},\"name\":\"provider-nop\"},\"spec\":{\"package\":\"xpkg.crossplane.io/crossplane-contrib/provider-nop:v0.5.0\"}}\n"
+                },
+                "creationTimestamp": "2026-07-26T04:45:23Z",
+                "generation": 1,
+                "name": "provider-nop",
+                "resourceVersion": "843",
+                "uid": "9d186038-2a47-493a-b736-1924b6d9e36a"
+            },
+            "spec": {
+                "ignoreCrossplaneConstraints": false,
+                "package": "xpkg.crossplane.io/crossplane-contrib/provider-nop:v0.5.0",
+                "packagePullPolicy": "IfNotPresent",
+                "revisionActivationPolicy": "Automatic",
+                "revisionHistoryLimit": 1,
+                "runtimeConfigRef": {
+                    "apiVersion": "pkg.crossplane.io/v1beta1",
+                    "kind": "DeploymentRuntimeConfig",
+                    "name": "default"
+                },
+                "skipDependencyResolution": false
+            },
+            "status": {
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:32Z",
+                        "observedGeneration": 1,
+                        "reason": "HealthyPackageRevision",
+                        "status": "True",
+                        "type": "Healthy"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:25Z",
+                        "observedGeneration": 1,
+                        "reason": "ActivePackageRevision",
+                        "status": "True",
+                        "type": "Installed"
+                    }
+                ],
+                "currentIdentifier": "xpkg.crossplane.io/crossplane-contrib/provider-nop:v0.5.0",
+                "currentRevision": "provider-nop-1da4c9fd07cb",
+                "resolvedPackage": "xpkg.crossplane.io/crossplane-contrib/provider-nop:v0.5.0"
+            }
+        },
+        {
+            "apiVersion": "pkg.crossplane.io/v1",
+            "kind": "Function",
+            "metadata": {
+                "annotations": {
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"pkg.crossplane.io/v1\",\"kind\":\"Function\",\"metadata\":{\"annotations\":{},\"name\":\"function-patch-and-transform\"},\"spec\":{\"package\":\"xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.10.6\"}}\n"
+                },
+                "creationTimestamp": "2026-07-26T04:45:23Z",
+                "generation": 1,
+                "name": "function-patch-and-transform",
+                "resourceVersion": "827",
+                "uid": "64cd1315-dc21-420e-a5bc-5f8e185f7e94"
+            },
+            "spec": {
+                "ignoreCrossplaneConstraints": false,
+                "package": "xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.10.6",
+                "packagePullPolicy": "IfNotPresent",
+                "revisionActivationPolicy": "Automatic",
+                "revisionHistoryLimit": 1,
+                "runtimeConfigRef": {
+                    "apiVersion": "pkg.crossplane.io/v1beta1",
+                    "kind": "DeploymentRuntimeConfig",
+                    "name": "default"
+                },
+                "skipDependencyResolution": false
+            },
+            "status": {
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:30Z",
+                        "observedGeneration": 1,
+                        "reason": "HealthyPackageRevision",
+                        "status": "True",
+                        "type": "Healthy"
+                    },
+                    {
+                        "lastTransitionTime": "2026-07-26T04:45:25Z",
+                        "observedGeneration": 1,
+                        "reason": "ActivePackageRevision",
+                        "status": "True",
+                        "type": "Installed"
+                    }
+                ],
+                "currentIdentifier": "xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.10.6",
+                "currentRevision": "function-patch-and-transform-8b41a17b0455",
+                "resolvedPackage": "xpkg.crossplane.io/crossplane-contrib/function-patch-and-transform:v0.10.6"
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

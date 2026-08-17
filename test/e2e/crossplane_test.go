@@ -156,6 +156,20 @@ func TestCrossplaneV1ClaimAndClusterScopedXR(t *testing.T) {
 		t.Fatalf("walked %d nodes, want at least 3 (Claim -> XR -> composed); the v1 "+
 			"spec.resourceRef / spec.resourceRefs chain is not being followed", d.Stats.Nodes)
 	}
+	// A node count alone is NOT enough, and this assertion exists because the
+	// count passed while the fixture was broken. An unreachable node — a ref to
+	// a composed resource that was never created — still counts toward
+	// Stats.Nodes, so "Claim -> XR -> NotFound" reached 3 and looked healthy.
+	// The v1 composition had in fact been failing since the fixture was written
+	// (a cluster-scoped XR composing a namespaced NopResource with no
+	// namespace), and nothing here noticed.
+	for _, n := range d.Tree {
+		if n.Error != "" {
+			t.Errorf("the walk could not reach %s/%s: %s — a ref that resolves to nothing "+
+				"still counts toward Stats.Nodes, so the node count above cannot catch this",
+				n.Kind, n.Name, n.Error)
+		}
+	}
 	var sawClusterScoped bool
 	for _, n := range d.Tree {
 		if n.Kind == "XLegacyApp" && n.Namespace == "" {

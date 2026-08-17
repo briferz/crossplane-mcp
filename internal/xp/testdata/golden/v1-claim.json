@@ -1,0 +1,52 @@
+{
+    "apiVersion": "legacy.example.org/v1alpha1",
+    "kind": "LegacyAppClaim",
+    "metadata": {
+        "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"legacy.example.org/v1alpha1\",\"kind\":\"LegacyAppClaim\",\"metadata\":{\"annotations\":{},\"name\":\"legacy-demo\",\"namespace\":\"default\"},\"spec\":{\"message\":\"deliberately stuck, v1/LegacyCluster shape\"}}\n"
+        },
+        "creationTimestamp": "2026-07-26T04:45:36Z",
+        "finalizers": [
+            "finalizer.apiextensions.crossplane.io"
+        ],
+        "generation": 3,
+        "name": "legacy-demo",
+        "namespace": "default",
+        "resourceVersion": "953",
+        "uid": "d8c1cabe-af6a-49ec-abe2-23bf078ad161"
+    },
+    "spec": {
+        "compositeDeletePolicy": "Background",
+        "compositionRef": {
+            "name": "xlegacyapps.legacy.example.org"
+        },
+        "compositionRevisionRef": {
+            "name": "xlegacyapps.legacy.example.org-2b8916e"
+        },
+        "message": "deliberately stuck, v1/LegacyCluster shape",
+        "resourceRef": {
+            "apiVersion": "legacy.example.org/v1alpha1",
+            "kind": "XLegacyApp",
+            "name": "legacy-demo-7g7wt"
+        }
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-07-26T04:45:36Z",
+                "observedGeneration": 3,
+                "reason": "ReconcileSuccess",
+                "status": "True",
+                "type": "Synced"
+            },
+            {
+                "lastTransitionTime": "2026-07-26T04:45:36Z",
+                "message": "Claim is waiting for composite resource to become Ready",
+                "observedGeneration": 3,
+                "reason": "Waiting",
+                "status": "False",
+                "type": "Ready"
+            }
+        ]
+    }
+}

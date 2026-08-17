@@ -111,13 +111,27 @@ jobs:
           # Synced-only instant would classify the NopResource healthy and flunk
           # the top-suspect assertion for a reason that has nothing to do with
           # the code under test.
+          # This loop MUST fail when it times out rather than falling through.
+          # It used to just exhaust: the v1 composition was erroring, only one
+          # of the two composed resources ever appeared, and the run carried on
+          # to assertions that passed anyway — because an unresolvable ref still
+          # counts as a walked node. A wait that gives up quietly turns a broken
+          # fixture into a green run.
+          ok=0
           for _ in $(seq 1 60); do
             n=$(kubectl get nopresources.nop.crossplane.io -A -o json 2>/dev/null \
                   | jq '[.items[] | select(.status.conditions // [] | any(.type == "Ready"))] | length')
-            [ "${n:-0}" -ge 2 ] && break
+            if [ "${n:-0}" -ge 2 ]; then ok=1; break; fi
             sleep 5
           done
           kubectl get nopresources.nop.crossplane.io -A
+          if [ "$ok" != 1 ]; then
+            echo "::error::only ${n:-0} of 2 composed NopResources became ready."
+            echo "Both XRs and their Synced conditions (the composition error, if any):"
+            kubectl get xstuckapps,xlegacyapps -A \
+              -o custom-columns='KIND:.kind,NAME:.metadata.name,SYNCED:.status.conditions[?(@.type=="Synced")].message'
+            exit 1
+          fi
 
       - name: run the diagnostic suite against the cluster
         env:
@@ -128,6 +142,39 @@ jobs:
         env:
           CROSSPLANE_E2E: "1"
         run: go -C test/e2e test ./... -run ReadOnlyAgainstRealCluster -v -timeout 5m
+
+      # Export the objects upstream ACTUALLY wrote, for use as unit testdata.
+      # The reason this exists: a hand-written fixture encodes what its author
+      # believes a provider emits, and this repo has now shipped one bug from
+      # exactly that gap — every fixture here set a condition reason, while real
+      # provider-nop writes Ready=False with neither reason nor message, so the
+      # top-ranked suspect came back with no explanation and no unit test could
+      # have caught it. Golden objects captured from a live cluster let the fast
+      # per-PR suite run against real shapes instead of imagined ones.
+      #
+      # Runs on success only: fixtures captured from a broken cluster would
+      # enshrine the breakage as the expected shape.
+      - name: export golden fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/golden
+          kubectl get xstuckapps.example.org demo -n default -o json > /tmp/golden/v2-xr.json
+          kubectl get legacyappclaims.legacy.example.org legacy-demo -n default -o json \
+            > /tmp/golden/v1-claim.json
+          kubectl get xlegacyapps.legacy.example.org -o json > /tmp/golden/v1-xr-list.json
+          kubectl get nopresources.nop.crossplane.io -A -o json > /tmp/golden/composed-list.json
+          kubectl get providers.pkg.crossplane.io,functions.pkg.crossplane.io -o json \
+            > /tmp/golden/packages-list.json
+          kubectl version -o json > /tmp/golden/versions.json
+          # The one line that matters most, echoed into the log so a reader sees
+          # the shape without downloading anything.
+          jq -r '.items[] | "\(.kind)/\(.metadata.name): \(.status.conditions // [] | map("\(.type)=\(.status) reason=\"\(.reason // "")\"") | join(" "))"' \
+            /tmp/golden/composed-list.json
+      - name: upload golden fixtures
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-fixtures
+          path: /tmp/golden
 
       # A failure a week after the fact is only actionable with the cluster's
       # own account of what happened.
