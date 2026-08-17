@@ -67,6 +67,14 @@ jobs:
       - name: golangci-lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
+      # Guards one specific mistake that is invisible in review and, because the
+      # affected jobs only run on failure, invisible in CI too: a `gh` call in a
+      # job with no repository context. Both notifiers shipped that way and
+      # neither ever ran. Cheap, and it runs on every PR — unlike the jobs it
+      # protects.
+      - name: workflows declare a repo for gh
+        run: python3 .github/scripts/check-gh-context.py
+
   # Real kube-apiserver + etcd (envtest), no controllers. Covers what the unit
   # fakes structurally cannot: discovery caching and invalidation, the
   # involvedObject.uid field selector (dynamicfake ignores field selectors
@@ -119,50 +127,23 @@ jobs:
   # Scheduled runs only: a push/PR failure already has someone watching it, and
   # GitHub's own notifications for cron runs go to whoever last touched the
   # workflow file, which is nobody in particular.
+  # Delegates to the single shared implementation. It lived inline here and in
+  # e2e.yml as near-identical copies, which is how the same `gh` bug existed in
+  # two places and was fixed twice. The shared workflow also self-tests, so this
+  # path is exercised without waiting for a real emergency.
   notify-scheduled-failure:
     name: notify on scheduled failure
     needs: [build-test, lint, integration, govulncheck]
     if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
-    steps:
-      - name: open or update the tracking issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # REQUIRED. This job deliberately has no actions/checkout — it needs no
-          # source — but without a git remote `gh` cannot infer which repo to act
-          # on and every command dies with:
-          #   failed to run git: fatal: not a git repository
-          # That is not hypothetical: it is why this notifier never fired once
-          # between being added and 2026-08-17, including the run that found four
-          # stdlib CVEs. A notifier that fails silently is worse than none, since
-          # its presence is taken as coverage.
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TITLE: "Scheduled CI is failing on main"
-        run: |
-          set -euo pipefail
-          body=$(printf '%s\n' \
-            "The weekly scheduled CI run failed on \`main\`." \
-            "" \
-            "Run: ${RUN_URL}" \
-            "" \
-            "This job only fires for \`schedule\` events. The most likely cause is a" \
-            "newly disclosed vulnerability reaching \`govulncheck\` — the reason the" \
-            "cron exists — rather than anything a commit changed." \
-            "" \
-            "This issue is reused rather than reopened weekly; it will keep collecting" \
-            "comments until the run goes green and someone closes it.")
-          # Match on title rather than a label so the workflow carries no
-          # dependency on repo labels existing.
-          existing=$(gh issue list --state open --json number,title \
-            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
-          if [ -n "${existing}" ]; then
-            echo "commenting on existing issue #${existing}"
-            gh issue comment "${existing}" --body "${body}"
-          else
-            echo "opening a new tracking issue"
-            gh issue create --title "${TITLE}" --body "${body}"
-          fi
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      title: "Scheduled CI is failing on main"
+      intro: >-
+        The weekly scheduled CI run failed on `main`. This job only fires for
+        `schedule` events, so the most likely cause is a newly disclosed
+        vulnerability reaching `govulncheck` — the reason the cron exists —
+        rather than anything a commit changed.
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

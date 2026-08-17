@@ -1,0 +1,148 @@
+name: Notify failure
+
+# The single implementation of "a scheduled run failed, tell someone". Both
+# ci.yml and e2e.yml call it.
+#
+# It is one file rather than two copies because the two copies were how one bug
+# became two: neither ran actions/checkout, so `gh` had no repository to infer
+# and every invocation died with `fatal: not a git repository`. The same line
+# had to be fixed in both places on 2026-08-17, having never worked in either.
+#
+# THE HARDER PROBLEM, and the reason this file exists at all: the callers gate
+# on `failure() && github.event_name == 'schedule'`, which cannot be reached on
+# purpose. A notifier that can only run during a real emergency is a notifier
+# nobody has ever seen run — that is precisely how it stayed broken from the day
+# it was written. So this workflow can also be fired deliberately, in self-test
+# mode, exercising the real path: no checkout, the real GITHUB_TOKEN, real
+# issues: write, real gh.
+#
+# Self-test mode is chosen by the ABSENCE of a title input, which makes the
+# schedule and workflow_dispatch entry points self-tests automatically. Note
+# that `github.event_name` cannot be used to decide this: inside a reusable
+# workflow it reports the CALLER's event, not "workflow_call".
+
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: "Issue title. Reused across runs, so it must be stable."
+        required: true
+        type: string
+      intro:
+        description: "First line of the body — what failed and what it usually means."
+        required: true
+        type: string
+      run_url:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Leave EMPTY to run a self-test. A value here posts a real alert."
+        required: false
+        type: string
+        default: ""
+  schedule:
+    # Monthly self-test, on the 1st at 05:00 UTC — before either weekly cron, so
+    # a broken notifier is known before the run that would need it.
+    #
+    # A smoke detector tested once at installation is what this repo already
+    # had. The test button has to press itself.
+    - cron: "0 5 1 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: open or update the tracking issue
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # REQUIRED. This job deliberately runs no actions/checkout — it needs
+          # no source — and without a git remote `gh` cannot infer the target
+          # repository. Removing this line reverts the 2026-08-17 outage in which
+          # the notifier died alongside the govulncheck failure it existed to
+          # report. The self-test below is what proves this still holds.
+          GH_REPO: ${{ github.repository }}
+          IN_TITLE: ${{ inputs.title }}
+          IN_INTRO: ${{ inputs.intro }}
+          IN_RUN_URL: ${{ inputs.run_url }}
+          THIS_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          title="${IN_TITLE:-}"
+          self_test=0
+          if [ -z "${title}" ]; then
+            self_test=1
+            # Marked unmistakably: a drill must never be mistaken for the real
+            # thing, by a human or by the title-matching below.
+            title="Notifier self-test — drill, no action needed"
+            intro="Automated drill verifying the failure notifier can still open and update issues. Not a real failure."
+            run_url="${THIS_RUN}"
+          else
+            intro="${IN_INTRO}"
+            run_url="${IN_RUN_URL}"
+          fi
+
+          if [ "${self_test}" = 1 ]; then
+            body=$(printf '%s\n' \
+              "${intro}" \
+              "" \
+              "Run: ${run_url}" \
+              "" \
+              "This exercises the same code path a real alert uses — no checkout," \
+              "the real GITHUB_TOKEN, real \`issues: write\`, real \`gh\`. If this" \
+              "issue exists, the notifier works. It is closed again automatically.")
+          else
+            body=$(printf '%s\n' \
+              "${intro}" \
+              "" \
+              "Run: ${run_url}" \
+              "" \
+              "This issue is reused rather than reopened; it keeps collecting comments" \
+              "until the run goes green and someone closes it.")
+          fi
+
+          # Match on title rather than a label, so this carries no dependency on
+          # repo labels existing — a label that was never created is another way
+          # this can silently do nothing.
+          export TITLE="${title}"
+          existing=$(gh issue list --state open --json number,title \
+            --jq "[.[] | select(.title == env.TITLE)][0].number // empty")
+
+          if [ -n "${existing}" ]; then
+            echo "commenting on existing issue #${existing}"
+            gh issue comment "${existing}" --body "${body}"
+            number="${existing}"
+          else
+            echo "opening a new tracking issue"
+            url=$(gh issue create --title "${title}" --body "${body}")
+            echo "created ${url}"
+            number="${url##*/}"
+          fi
+
+          # Read back rather than trusting the exit code. Without this the
+          # self-test is one more check that reports success without being able
+          # to report failure, which is the exact defect it exists to catch.
+          echo "verifying issue #${number} is really there"
+          state=$(gh issue view "${number}" --json state --jq .state)
+          if [ "${state}" != "OPEN" ]; then
+            echo "::error::issue #${number} is ${state}, expected OPEN — the notifier did not do its job"
+            exit 1
+          fi
+
+          if [ "${self_test}" = 1 ]; then
+            # Leave no litter: a drill that accumulates open issues trains people
+            # to ignore issues from this workflow, defeating the purpose.
+            gh issue close "${number}" --comment "Self-test passed; closing. Notifier is working as of ${THIS_RUN}"
+            echo "self-test PASSED — notifier opened, verified and closed #${number}"
+          else
+            echo "alert delivered to issue #${number}"
+          fi
