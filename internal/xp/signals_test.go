@@ -416,3 +416,42 @@ func TestBareStateNotAppliedToUnassessedNative(t *testing.T) {
 		}
 	}
 }
+
+// TestUnreachableSuspectGetsNoInventedState pins the Error guard in
+// bareStateMessages, which was previously unpinned — deleting it broke nothing.
+//
+// An unreachable node has no conditions because the walk never READ it, not
+// because nothing wrote them. Without the guard it collects a trailing "no
+// status conditions reported yet — nothing has written status for this
+// resource", which is an assertion about an object nobody looked at.
+//
+// Note what the guard does NOT do, since the code comment claimed otherwise:
+// it does not stop the fetch error being displaced. On this path the error is
+// PREPENDED after the fallback runs, and in the summary it is chosen before the
+// fallback is consulted — so the error leads either way. The bug is a fabricated
+// extra line, not a lost one.
+func TestUnreachableSuspectGetsNoInventedState(t *testing.T) {
+	const forbidden = `buckets.s3.aws.upbound.io "b" is forbidden: User cannot get resource`
+	root := unreachableNode(0, "Bucket", "b", forbidden)
+
+	d := Diagnose(context.Background(), &stubEvents{}, root, Stats{Nodes: 1}, false)
+
+	if len(d.Suspects) == 0 {
+		t.Fatal("an unreachable node must still be a suspect")
+	}
+	reasons := d.Suspects[0].Reasons
+	if len(reasons) == 0 || !strings.HasPrefix(reasons[0], unreachablePrefix) {
+		t.Fatalf("the fetch error must lead, got %v", reasons)
+	}
+	for _, r := range reasons {
+		if strings.Contains(r, "no status conditions") {
+			t.Errorf("invented a claim about an object the walk never read: %q", r)
+		}
+	}
+	if len(reasons) != 1 {
+		t.Errorf("an unreachable node has exactly one explanation — the fetch error; got %v", reasons)
+	}
+	if strings.Contains(d.Summary, "no status conditions") {
+		t.Errorf("summary invents the same claim: %q", d.Summary)
+	}
+}
