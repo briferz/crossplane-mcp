@@ -75,14 +75,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "crossplane-mcp",
-		Version: version,
-	}, &mcp.ServerOptions{Instructions: serverInstructions})
-	tools.Register(server, cl, rec)
+	server := newServer(cl, rec)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintf(os.Stderr, "crossplane-mcp: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// newServer builds the MCP server exactly as main does. Extracted purely so a
+// test can drive the real thing: the two protocol-level promises this project
+// makes — the read-only Instructions and every tool's readOnlyHint — are only
+// true if they survive the handshake, and nothing could observe that while the
+// server was assembled inline in main.
+func newServer(cl *k8s.Client, rec *tools.Recorder) *mcp.Server {
+	s := mcp.NewServer(&mcp.Implementation{
+		Name:    "crossplane-mcp",
+		Version: version,
+	}, &mcp.ServerOptions{Instructions: serverInstructions})
+	tools.Register(s, cl, rec)
+	return s
 }
