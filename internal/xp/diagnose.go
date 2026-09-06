@@ -58,10 +58,16 @@ func causeMessages(n *Node) []string {
 // MemoryPressure), so naming a False condition there would invent a problem.
 func bareStateMessages(n *Node) []string {
 	// A node the walk could not fetch has no conditions because it was never
-	// read, not because nothing wrote them. Its explanation is unreachablePrefix
-	// plus the fetch error; asserting anything about the status of an object we
-	// never saw would be an invention, and it would displace the RBAC or
-	// NotFound text that is the actually useful answer.
+	// READ, not because nothing wrote them, so "nothing has written status" is a
+	// claim about an object nobody looked at.
+	//
+	// Precisely: it fabricates a line rather than losing one. The fetch error is
+	// prepended after this runs on the suspects path, and chosen ahead of it on
+	// the summary path, so unreachablePrefix leads either way — the guard is not
+	// what keeps the RBAC/NotFound text at the front. Pinned by
+	// TestUnreachableSuspectGetsNoInventedState, which asserts exactly one
+	// reason. (Folding this fallback into causeMessages WOULD displace things,
+	// which is a different failure and has its own guard — see below.)
 	if n.Error != "" {
 		return nil
 	}
