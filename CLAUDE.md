@@ -60,10 +60,24 @@ Setting either variable asserts a cluster exists: the tests then fail rather
 than skip, because a silent skip is how a tier stops running and nobody
 notices. See `test/e2e/README.md`.
 
-- **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`**.
+- **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`**.
   A prebuilt golangci-lint binary built with an older Go *refuses* this module
   (go.mod targets go 1.27); building it from source with the local toolchain is
   required. CI does this; `make lint` assumes a v2 binary on PATH.
+  - **A green lint run on macOS does not mean CI is green.** The linter analyses
+    the *stdlib* too, and much of it is platform-specific. Moving to Go 1.27
+    broke `golangci-lint` v2.12.2 on CI only: its bundled staticcheck (v0.7.0)
+    panicked building IR for the **linux** `internal/poll` — `unexpected expr:
+    *ast.KeyValueExpr`, exit status 3 — while darwin/arm64 reported `0 issues`.
+    v2.13.2 (staticcheck v0.8.1) handles it. Same shape as the
+    govulncheck-toolchain-skew trap: a local gate run proves nothing about CI
+    unless **both** the toolchain *and* GOOS/GOARCH match.
+  - To reproduce CI's platform locally, set GOOS/GOARCH on a **natively built**
+    binary — `go install …@<ver>` then
+    `GOOS=linux GOARCH=amd64 $(go env GOPATH)/bin/golangci-lint run ./...`.
+    Putting GOOS on `go run` instead cross-compiles the *linter* and dies with
+    `exec format error`, which looks like a reproduction (non-zero exit) but
+    never runs a single analyser.
 - Add tests for diagnostic logic in `internal/xp` — it's pure and needs no cluster.
 
 ## Hard rules (do not violate)

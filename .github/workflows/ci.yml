@@ -65,7 +65,7 @@ jobs:
       # than using a prebuilt binary: golangci-lint refuses to run when the Go
       # version it was built with is older than go.mod's (here go 1.27).
       - name: golangci-lint
-        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
 
       # Guards one specific mistake that is invisible in review and, because the
       # affected jobs only run on failure, invisible in CI too: a `gh` call in a

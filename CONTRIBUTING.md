@@ -50,7 +50,7 @@ Individual targets:
 > `make lint` requires `golangci-lint` v2 on your `PATH`. If you don't have it,
 > run it the same way CI does (version pinned in
 > [ci.yml](./.github/workflows/ci.yml)):
-> `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...`
+> `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...`
 
 ### Trying it against a cluster
 
