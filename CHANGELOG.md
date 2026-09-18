@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/briferz/crossplane-mcp/compare/v0.8.1...v0.8.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **deps:** ship on go-sdk 1.8.0, client-go 0.37 and Go 1.27 ([#78](https://github.com/briferz/crossplane-mcp/issues/78)) ([3c72c5a](https://github.com/briferz/crossplane-mcp/commit/3c72c5ab238c40cff467459dd543acad64382bad))
+
 ## [0.8.1](https://github.com/briferz/crossplane-mcp/compare/v0.8.0...v0.8.1) (2026-08-17)
 
 
