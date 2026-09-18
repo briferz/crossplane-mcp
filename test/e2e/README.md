@@ -103,6 +103,17 @@ splitting the directories is what keeps it invisible until then.
 ## Version pinning
 
 `ENVTEST_K8S_VERSION` in the Makefile tracks the repo's `client-go` minor
-(currently `1.36.2` against `client-go v0.36.3`). Bump both together: testing
+(currently `1.37.0` against `client-go v0.37.0`). Bump both together: testing
 against a materially different apiserver than the one the client targets is how
 this tier would quietly stop meaning anything.
+
+Three pins have to move as a set, and a Dependabot bump only moves the first:
+
+| Pin | Where |
+|---|---|
+| `client-go` / `apimachinery` | root `go.mod` — bumped by Dependabot |
+| `ENVTEST_K8S_VERSION` + the `envtest-…` cache key | `Makefile`, `ci.yml` |
+| `SETUP_ENVTEST` (controller-runtime tools) | `Makefile` — keep level with `controller-runtime` in `test/e2e/go.mod` |
+
+Nothing fails when they drift; the tier just quietly tests a different
+apiserver than the client targets. Check them after any `client-go` minor bump.
