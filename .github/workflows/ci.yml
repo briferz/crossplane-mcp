@@ -101,7 +101,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: bin/envtest
-          key: envtest-${{ runner.os }}-1.36.2
+          key: envtest-${{ runner.os }}-1.37.0
       - name: integration tests (envtest)
         run: make e2e-envtest
 

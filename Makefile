@@ -30,8 +30,8 @@ vulncheck:
 # The integration suite lives in a nested module (test/e2e) so controller-runtime
 # stays out of the shipped go.mod and out of govulncheck's surface, and so the
 # harness's writes are never scanned by the read-only forbidigo rule.
-ENVTEST_K8S_VERSION ?= 1.36.2
-SETUP_ENVTEST := sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
+ENVTEST_K8S_VERSION ?= 1.37.0
+SETUP_ENVTEST := sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.1
 
 # Compile-check the nested module so it cannot silently rot when the main
 # module's internals change. Part of `check` because it costs ~a second and a
