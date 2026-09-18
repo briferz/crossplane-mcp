@@ -1,6 +1,6 @@
 module github.com/briferz/crossplane-mcp/test/e2e
 
-go 1.26.5
+go 1.27.0
 
 replace github.com/briferz/crossplane-mcp => ../..
 

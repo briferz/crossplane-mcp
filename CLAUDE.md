@@ -62,7 +62,7 @@ notices. See `test/e2e/README.md`.
 
 - **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`**.
   A prebuilt golangci-lint binary built with an older Go *refuses* this module
-  (go.mod targets go 1.26); building it from source with the local toolchain is
+  (go.mod targets go 1.27); building it from source with the local toolchain is
   required. CI does this; `make lint` assumes a v2 binary on PATH.
 - Add tests for diagnostic logic in `internal/xp` — it's pure and needs no cluster.
 

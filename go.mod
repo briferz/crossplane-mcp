@@ -1,17 +1,24 @@
 module github.com/briferz/crossplane-mcp
 
-go 1.26.4
+go 1.27.0
 
 // Build/CI toolchain floor, distinct from the `go` directive above: the `go`
-// line stays at 1.26.4 so it remains the minimum this module asks of consumers,
-// while `toolchain` pins what actually builds it here. CI and the release jobs
-// resolve Go via setup-go's `go-version-file: go.mod`, so without this line they
-// build with exactly 1.26.4 and never pick up stdlib security fixes.
-// Bump this when govulncheck reports a stdlib advisory (see GO-2026-5856).
-// 1.26.6 closes four reachable stdlib advisories reported on 2026-08-17:
-// GO-2026-6218 (net/url), GO-2026-6090 (crypto/tls), GO-2026-5972
-// (encoding/asn1), GO-2026-5026 (net/http).
-toolchain go1.26.6
+// line is the minimum this module asks of consumers, while `toolchain` is what
+// actually builds it here. CI and the release jobs resolve Go via setup-go's
+// `go-version-file: go.mod`, which installs exactly what THIS line names.
+//
+// It is a FLOOR, not a pin: a newer local toolchain — or a newer `golang` image
+// in the Dockerfile — is used as-is and never downgrades to it. That is why this
+// line and the Dockerfile must move TOGETHER. Bumping the image alone ships a
+// container built on a toolchain no CI gate ever exercised, while the release
+// binaries (also setup-go, also this line) stay on the old one.
+//
+// Bump when govulncheck reports a stdlib advisory, or to stay current. The move
+// to 1.27 was the latter: 1.26.6 was clean when it was made, verified with
+// GOTOOLCHAIN=go1.26.6. Advisory-driven history: 1.26.5 (GO-2026-5856); 1.26.6
+// (GO-2026-6218 net/url, GO-2026-6090 crypto/tls, GO-2026-5972 encoding/asn1,
+// GO-2026-5026 net/http).
+toolchain go1.27.1
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
