@@ -43,7 +43,14 @@ jobs:
           fi
 
       - name: go test (race + coverage)
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+
+      # -coverpkg makes the merged profile correct but the per-package lines
+      # unreadable: each now reports its share of ALL statements, so internal/k8s
+      # prints ~12% while actually covering ~82% of itself. Print the real total
+      # from the profile so the log says something true at a glance.
+      - name: coverage total
+        run: go tool cover -func=coverage.out | tail -1
 
       - name: upload coverage
         uses: actions/upload-artifact@v7
@@ -74,6 +81,13 @@ jobs:
       # protects.
       - name: workflows declare a repo for gh
         run: python3 .github/scripts/check-gh-context.py
+
+      # Catches the other silent class: pins that must move together and don't.
+      # Dependabot moves one half, nothing moves the other, and nothing fails —
+      # the affected job keeps passing while testing something other than what
+      # ships. Three separate instances of this landed in one week.
+      - name: coupled version pins agree
+        run: python3 .github/scripts/check-version-pins.py
 
   # Real kube-apiserver + etcd (envtest), no controllers. Covers what the unit
   # fakes structurally cannot: discovery caching and invalidation, the
