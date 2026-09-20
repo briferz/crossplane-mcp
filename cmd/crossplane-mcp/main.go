@@ -38,6 +38,8 @@ func main() {
 		kubeconfig  = flag.String("kubeconfig", "", "path to kubeconfig (defaults to KUBECONFIG / ~/.kube/config; in-cluster if absent)")
 		reqTimeout  = flag.Duration("request-timeout", k8s.DefaultRequestTimeout, "per-request timeout for Kubernetes API calls; 0 disables (a wedged apiserver can then park a tool call indefinitely)")
 		kubeContext = flag.String("context", "", "kubeconfig context to use (defaults to current-context)")
+		qps         = flag.Float64("qps", float64(k8s.DefaultQPS), "client-side API request rate; negative disables client-side throttling and relies on the server's API Priority and Fairness")
+		burst       = flag.Int("burst", k8s.DefaultBurst, "client-side API request burst; negative disables client-side throttling")
 		logFile     = flag.String("log-file", "", "append a JSONL record of each tool call (input+output) to this path, or '-' for stderr; also via CROSSPLANE_MCP_LOG_FILE")
 		logRedact   = flag.Bool("log-redact", true, "mask scalar values under sensitive keys (password/token/secret/…) in the log; also via CROSSPLANE_MCP_LOG_REDACT=false")
 		showVersion = flag.Bool("version", false, "print version and exit")
@@ -69,7 +71,24 @@ func main() {
 		defer func() { _ = rec.Close() }()
 	}
 
-	cl, err := k8s.New(*kubeconfig, *kubeContext, *reqTimeout)
+	// --request-timeout=0 has always meant "unbounded", so it is translated
+	// rather than passed through: Options treats 0 as "unset" and a negative
+	// value as "disabled", which a flag default of DefaultRequestTimeout would
+	// otherwise make unreachable.
+	timeout := *reqTimeout
+	if timeout == 0 {
+		timeout = -1
+	}
+	cl, err := k8s.New(k8s.Options{
+		KubeconfigPath: *kubeconfig,
+		Context:        *kubeContext,
+		RequestTimeout: timeout,
+		QPS:            float32(*qps),
+		Burst:          *burst,
+		// Identifies this tool in the cluster's audit log instead of a generic
+		// client-go string.
+		UserAgent: "crossplane-mcp/" + version,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crossplane-mcp: %v\n", err)
 		os.Exit(1)

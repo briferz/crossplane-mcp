@@ -219,7 +219,16 @@ func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace s
 		// fetched in a single unbounded List against the API server.
 		cont := ""
 		for {
-			list, err := lister.List(ctx, metav1.ListOptions{Limit: listChunkSize, Continue: cont})
+			// Retried for the same reason Get is (see retry.go), with a
+			// different consequence: a dropped page does not invent a suspect,
+			// it silently shortens the triage list — the resource that is
+			// actually broken can simply stop being listed.
+			var list *unstructured.UnstructuredList
+			err := withRetry(ctx, func() error {
+				var lerr error
+				list, lerr = lister.List(ctx, metav1.ListOptions{Limit: listChunkSize, Continue: cont})
+				return lerr
+			})
 			if err != nil {
 				res.Notes = append(res.Notes, listSkipNote(k, namespace, err))
 				if ctx.Err() != nil {
