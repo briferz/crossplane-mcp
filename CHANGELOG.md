@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/briferz/crossplane-mcp/compare/v0.8.2...v0.8.3) (2026-09-20)
+
+
+### Performance Improvements
+
+* **k8s:** stop throttling at 5 req/s, and retry transient read failures ([#80](https://github.com/briferz/crossplane-mcp/issues/80)) ([503e709](https://github.com/briferz/crossplane-mcp/commit/503e709add675e72bcf7d0c8ea9297dc15ab516e))
+
 ## [0.8.2](https://github.com/briferz/crossplane-mcp/compare/v0.8.1...v0.8.2) (2026-09-18)
 
 
