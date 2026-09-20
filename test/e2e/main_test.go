@@ -109,7 +109,7 @@ func TestMain(m *testing.M) {
 func newServerClient(t *testing.T, cfg *rest.Config) *k8s.Client {
 	t.Helper()
 	path := writeKubeconfig(t, cfg)
-	cl, err := k8s.New(path, "", 30*time.Second)
+	cl, err := k8s.New(k8s.Options{KubeconfigPath: path, RequestTimeout: 30 * time.Second, UserAgent: "crossplane-mcp-e2e"})
 	if err != nil {
 		t.Fatalf("k8s.New: %v", err)
 	}

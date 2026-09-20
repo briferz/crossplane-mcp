@@ -55,7 +55,9 @@ type Client struct {
 // rest.Config.Timeout is 0 and only client-go's own transport defaults apply —
 // 32s on discovery, nothing at all on the dynamic client — so a wedged
 // apiserver or load balancer can park a tool call indefinitely. Overridable
-// with --request-timeout; 0 restores the unbounded behaviour.
+// with --request-timeout, where 0 still means unbounded: main translates that
+// to a negative Options.RequestTimeout, because a Go zero value cannot mean
+// both "caller said nothing" and "caller said none".
 const DefaultRequestTimeout = 30 * time.Second
 
 // invalidateInterval rate-limits discovery invalidation. A tree walk resolves
@@ -63,11 +65,50 @@ const DefaultRequestTimeout = 30 * time.Second
 // the whole cluster once per miss.
 const invalidateInterval = 5 * time.Second
 
+// DefaultQPS and DefaultBurst replace client-go's own defaults, which are
+// DefaultQPS=5 / DefaultBurst=10 whenever the fields are left zero
+// (rest/config.go). Those are a legacy client-side guard from before API
+// Priority and Fairness did the job server-side, and they are badly matched to
+// this tool: a diagnose walk is bounded at maxNodes=200 one-object Gets plus
+// events for up to maxSuspects=10, so ~210 requests at 5/s is roughly 40
+// seconds of pure client-side throttling against a cluster that could answer in
+// one.
+//
+// These are still a bound, not a removal — the walk is capped, so this cannot
+// become an unbounded scrape. Set --qps negative to disable client-side
+// throttling entirely and rely on the server's APF.
+const (
+	DefaultQPS   float32 = 50
+	DefaultBurst int     = 100
+)
+
+// Options configure a Client. The zero value is valid and applies the
+// Default* constants; only RequestTimeout distinguishes "unset" from "disabled"
+// (see New).
+type Options struct {
+	// KubeconfigPath is an explicit kubeconfig; empty honours KUBECONFIG and
+	// the default path, then falls back to in-cluster config.
+	KubeconfigPath string
+	// Context pins a kubeconfig context; empty uses current-context.
+	Context string
+	// RequestTimeout bounds every request. Zero means DefaultRequestTimeout;
+	// pass a negative value to disable the bound.
+	RequestTimeout time.Duration
+	// QPS/Burst bound client-side request rate. Zero means the Default*
+	// constants; negative disables client-side throttling.
+	QPS   float32
+	Burst int
+	// UserAgent identifies this tool in the apiserver's audit log. Empty uses
+	// a generic client-go string, which is worth avoiding for something whose
+	// whole pitch is being safe to point at production.
+	UserAgent string
+}
+
 // New builds a Client from a kubeconfig (honouring KUBECONFIG and the default
 // path), optionally pinned to a named context. If no kubeconfig is found it
 // falls back to in-cluster config.
-func New(kubeconfigPath, contextName string, requestTimeout time.Duration) (*Client, error) {
-	cfg, loader, err := restConfig(kubeconfigPath, contextName, requestTimeout)
+func New(opts Options) (*Client, error) {
+	cfg, loader, err := restConfig(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -95,27 +136,66 @@ func New(kubeconfigPath, contextName string, requestTimeout time.Duration) (*Cli
 // Note for future work: this timeout is a per-request deadline on the shared
 // config, so a genuine Watch — nothing issues one today — would be truncated at
 // it. A watch client would need its own config with Timeout unset.
-func restConfig(kubeconfigPath, contextName string, requestTimeout time.Duration) (*rest.Config, clientcmd.ClientConfig, error) {
+func restConfig(opts Options) (*rest.Config, clientcmd.ClientConfig, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfigPath != "" {
-		rules.ExplicitPath = kubeconfigPath
+	if opts.KubeconfigPath != "" {
+		rules.ExplicitPath = opts.KubeconfigPath
 	}
 	overrides := &clientcmd.ConfigOverrides{}
-	if contextName != "" {
-		overrides.CurrentContext = contextName
+	if opts.Context != "" {
+		overrides.CurrentContext = opts.Context
 	}
 	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 
 	cfg, err := loader.ClientConfig()
 	if err != nil {
-		if inCfg, inErr := rest.InClusterConfig(); inErr == nil {
-			inCfg.Timeout = requestTimeout
-			return inCfg, nil, nil
+		inCfg, inErr := rest.InClusterConfig()
+		if inErr != nil {
+			return nil, nil, fmt.Errorf("load kubeconfig: %w", err)
 		}
-		return nil, nil, fmt.Errorf("load kubeconfig: %w", err)
+		applyOptions(inCfg, opts)
+		return inCfg, nil, nil
 	}
-	cfg.Timeout = requestTimeout
+	applyOptions(cfg, opts)
 	return cfg, loader, nil
+}
+
+// applyOptions maps Options onto a rest.Config. Kept in one place so the
+// in-cluster and kubeconfig paths cannot drift — the in-cluster branch
+// previously set only the timeout, so anything added here would have silently
+// applied to one path and not the other.
+func applyOptions(cfg *rest.Config, opts Options) {
+	switch {
+	case opts.RequestTimeout < 0:
+		cfg.Timeout = 0 // explicitly unbounded
+	case opts.RequestTimeout == 0:
+		cfg.Timeout = DefaultRequestTimeout
+	default:
+		cfg.Timeout = opts.RequestTimeout
+	}
+
+	// Zero means "unset" to client-go and silently yields 5/10, so the zero
+	// value has to be mapped here rather than passed through.
+	switch {
+	case opts.QPS < 0:
+		cfg.QPS = -1 // client-go treats <0 as "no client-side limiter"
+	case opts.QPS == 0:
+		cfg.QPS = DefaultQPS
+	default:
+		cfg.QPS = opts.QPS
+	}
+	switch {
+	case opts.Burst < 0:
+		cfg.Burst = -1
+	case opts.Burst == 0:
+		cfg.Burst = DefaultBurst
+	default:
+		cfg.Burst = opts.Burst
+	}
+
+	if opts.UserAgent != "" {
+		cfg.UserAgent = opts.UserAgent
+	}
 }
 
 // Target identifies a resolved resource type to query.
@@ -293,9 +373,26 @@ func (c *Client) Get(ctx context.Context, t Target, namespace, name string) (*un
 		if namespace == "" {
 			return nil, fmt.Errorf("namespace is required for namespaced kind %q", t.Kind)
 		}
-		return ri.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	}
-	return ri.Get(ctx, name, metav1.GetOptions{})
+	// Retried because a dropped fetch is not a gap in the answer — it becomes a
+	// suspect. See retry.go: an unreachable node ranks tier 1, deepest-first,
+	// and is usually the deepest, so a blip can be named the root cause.
+	var (
+		obj *unstructured.Unstructured
+		err error
+	)
+	err = withRetry(ctx, func() error {
+		if t.Namespaced {
+			obj, err = ri.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		} else {
+			obj, err = ri.Get(ctx, name, metav1.GetOptions{})
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return obj, nil
 }
 
 // Event is a pruned Kubernetes event.

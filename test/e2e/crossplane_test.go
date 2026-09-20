@@ -26,7 +26,7 @@ import (
 func clusterClient(t *testing.T) *k8s.Client {
 	t.Helper()
 	kubeconfig := os.Getenv("KUBECONFIG")
-	cl, err := k8s.New(kubeconfig, "", 60*time.Second)
+	cl, err := k8s.New(k8s.Options{KubeconfigPath: kubeconfig, RequestTimeout: 60 * time.Second, UserAgent: "crossplane-mcp-e2e"})
 	if err != nil {
 		t.Fatalf("k8s.New(%q): %v", kubeconfig, err)
 	}
