@@ -136,7 +136,9 @@ notices. See `test/e2e/README.md`.
 - **Pre-1.0 (`0.x`) versioning:** `feat:` and breaking changes bump the **minor**,
   `fix:` bumps the **patch** (configured in `release-please-config.json`).
 - **`main` is protected** by a ruleset: required status checks (`build & test`,
-  `golangci-lint`, `govulncheck`), **signed commits**, linear history, PR-only.
+  `golangci-lint`, `govulncheck`, `integration`), **signed commits**, linear
+  history, PR-only, and strict up-to-date branches (which is why a PR behind
+  `main` shows as BLOCKED until rebased).
 - **The signed-commits rule is evaluated on the PR's BRANCH commits, not on the
   merge result.** This distinction hides itself: GitHub signs the squash commit
   it creates, so `main`'s history reads `verified=true` for every release even
@@ -364,7 +366,11 @@ See README "Releasing".
   CI and tooling, where the slow feedback loop hides this for weeks.
 - Phase 2 (remaining, planned): composition tools (`list_compositions` /
   `describe_composition`) + XRD/MR schema tools (`explain_xrd` / `get_schema`).
-- Open decisions (asked, unanswered): promote the native tier to per-PR (its
-  assertions take ~22s but the job is ~2.5min wall including cluster creation;
-  one external image; guards shipped `internal/xp` logic)? promote `integration`
-  to a required check now it has burned in?
+- Both former open decisions are now settled: `integration` is a **required
+  check** on `main` (alongside `build & test`, `golangci-lint`, `govulncheck`),
+  and the **native readiness tier runs on every PR**. The native job is
+  deliberately still NOT required — it is new to the per-PR path and should burn
+  in first, since a check made required on day one blocks every merge on its
+  first flake. The Crossplane job stays cron/dispatch/label and should stay that
+  way: three external registries on its critical path would block Dependabot and
+  release-please PRs, which cannot be re-run by hand as easily.

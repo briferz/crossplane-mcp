@@ -1,15 +1,23 @@
 name: E2E (kind + Crossplane)
 
-# The full-fidelity tier: a real kind cluster running real Crossplane, so the
-# assertions can catch what nothing else can — that upstream still writes
-# composed refs where the walker looks. The envtest tier's CRDs only MIMIC
-# XRD-generated ones, so it would keep passing if that shape changed.
+# Two kind-based jobs with deliberately different cadences, because they carry
+# deliberately different risk:
 #
-# DELIBERATELY NOT A REQUIRED CHECK, and it should stay that way. Three external
-# registries sit on its critical path (kindest/node, the Crossplane chart,
-# xpkg.crossplane.io), none of them ours. As a required check it would block
-# Dependabot and release-please PRs harder than a human's, since those cannot be
-# re-run by hand as easily.
+#   kind + Crossplane      cron / dispatch / `e2e` label. The full-fidelity
+#                          tier — only it can catch upstream moving composed
+#                          refs, since the envtest CRDs merely MIMIC
+#                          XRD-generated ones. Three external registries sit on
+#                          its critical path (kindest/node, the Crossplane
+#                          chart, xpkg.crossplane.io), none of them ours.
+#   kind (native readiness) EVERY PR. Only kindest/node and one pause image,
+#                          and it guards logic that is in the released binary.
+#
+# NEITHER IS A REQUIRED CHECK. For the Crossplane job that is permanent: as a
+# required check those three registries would block Dependabot and
+# release-please PRs harder than a human's, since those cannot be re-run by hand
+# as easily. For the native job it is provisional — it is new to the per-PR path
+# and should burn in before being promoted, because a check made required on day
+# one blocks every merge on its first flake.
 on:
   schedule:
     # Monday 07:00 UTC — an hour after ci.yml's cron, so a red result here is
@@ -22,10 +30,15 @@ on:
         required: false
         default: ""
   pull_request:
-    # Opt-in per PR by applying the `e2e` label — for changes that touch the
-    # walker, discovery, or the RBAC manifest, where a week-late cron signal is
-    # too late to be useful.
-    types: [labeled]
+    # Default types (opened/synchronize/reopened) PLUS labeled. The native
+    # readiness job runs on every PR; the Crossplane job stays opt-in behind the
+    # `e2e` label and is simply skipped otherwise.
+    #
+    # `labeled` alone was not enough even for the opt-in case: labelling a PR
+    # and then pushing produced no further run, because a push is `synchronize`
+    # and that was not in the list. The label gate below reads the PR's CURRENT
+    # labels rather than the event's, so it now holds across all four types.
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -37,7 +50,11 @@ concurrency:
 jobs:
   kind:
     name: kind + Crossplane
-    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'e2e' }}
+    # contains(...labels.*.name) rather than github.event.label.name: the latter
+    # is only populated on a `labeled` event, so with the wider trigger list it
+    # would be null on every push and the job would never run for an already
+    # labelled PR.
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e') }}
     runs-on: ubuntu-latest
     # Generous but bounded: a hung package install should fail, not burn an hour.
     timeout-minutes: 25
@@ -206,16 +223,21 @@ jobs:
   # The native-readiness tier. Separate from the job above on purpose: it needs a
   # real kube-controller-manager and kubelet but NOT Crossplane, so kindest/node
   # and one pause image are its only external dependencies — none of the three
-  # registries that force the Crossplane job onto a weekly cadence. That makes it
-  # a candidate for running on every PR later; it is kept on the same triggers
-  # for now rather than widening CI unilaterally.
+  # registries that force the Crossplane job onto a weekly cadence — so it runs
+  # on EVERY PR, unlike the job above.
   #
   # What it establishes: that internal/xp/native.go's rules match what upstream
   # controllers really write. Unit tests assert against conditions this repo
-  # authored, so they only prove the rules read their own fixtures back.
+  # authored, so they only prove the rules read their own fixtures back — and
+  # that gap is what let a live Pod false positive ship. A week-late cron signal
+  # is too slow for logic that is in the released binary.
+  #
+  # Deliberately NOT a required check yet: it is new to the per-PR path and
+  # should burn in first. A check promoted straight to required blocks every
+  # merge on its first flake.
   native:
     name: kind (native readiness)
-    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'e2e' }}
+    # No condition: every trigger runs it, including every pull_request.
     runs-on: ubuntu-latest
     # Comfortably above the test's own 20m timeout plus setup. If the JOB times
     # out the run is cancelled and the if: failure() diagnostics never execute,
