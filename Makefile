@@ -43,7 +43,7 @@ e2e-vet:
 # cannot: discovery caching/invalidation, field selectors, RBAC, HTTP/2.
 e2e-envtest:
 	@KUBEBUILDER_ASSETS="$$(go run $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(CURDIR)/bin/envtest -p path)" \
-		go -C test/e2e test ./... -timeout 10m
+		go -C test/e2e test -race ./... -timeout 10m
 
 # Real controllers and a real kubelet, no Crossplane. Answers what upstream
 # controllers actually write into status — the thing internal/xp/native.go

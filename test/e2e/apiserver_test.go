@@ -2,7 +2,9 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,4 +319,99 @@ func mustEvent(t *testing.T, core kubernetes.Interface, ns, name string, about *
 	if _, err := core.CoreV1().Events(ns).Create(context.Background(), ev, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create event %s: %v", name, err)
 	}
+}
+
+// TestTreeWalkFanOutAgainstRealAPIServer drives the parallel walk's concurrent
+// path against a real apiserver, dynamic client and HTTP/2 transport. The other
+// walk tests here give each XR a single ref, and the walk only fans out at a
+// node with two or more fetchable children — so they never reach the
+// concurrent code at all. `make e2e-envtest` — which CI's required `integration`
+// job runs — passes -race, and that is what makes this meaningful; peakClient
+// below proves the concurrent path actually ran.
+//
+// The refs mix the cases whose placement the walk must not disturb: a ref that
+// omits its namespace (inheriting the XR's), and a dangling ref that must come
+// back as a NotFound error node in its original position.
+func TestTreeWalkFanOutAgainstRealAPIServer(t *testing.T) {
+	requireEnvtest(t)
+	ctx := context.Background()
+	cl := newServerClient(t, testEnv.Config)
+	core := kubernetes.NewForConfigOrDie(testEnv.Config)
+
+	ns := "fanout-test"
+	mustNamespace(t, core, ns)
+
+	var refs []map[string]any
+	for i := range 12 {
+		name := fmt.Sprintf("leaf-%02d", i)
+		mustNopResource(t, ns, name)
+		refs = append(refs, map[string]any{"apiVersion": "nop.example.org/v1", "kind": "NopResource", "namespace": ns, "name": name})
+	}
+	mustNopResource(t, ns, "inherits")
+	refs = append(refs,
+		map[string]any{"apiVersion": "nop.example.org/v1", "kind": "NopResource", "name": "inherits"}, // no namespace
+		map[string]any{"apiVersion": "nop.example.org/v1", "kind": "NopResource", "namespace": ns, "name": "does-not-exist"},
+	)
+
+	xr := newUnstructured("apps.example.org/v1", "XApp", ns, "fanout")
+	setNestedRefs(t, xr, refs, "spec", "crossplane", "resourceRefs")
+	mustCreate(t, xr)
+
+	root, err := cl.Get(ctx, mustResolve(t, cl, "apps.example.org/v1", "XApp"), ns, "fanout")
+	if err != nil {
+		t.Fatalf("get XR: %v", err)
+	}
+	// Wrap the REAL client to observe concurrency. Without this the test would
+	// pass identically with the prefetch switched off, and its -race run would
+	// say nothing about the concurrent path it exists for.
+	pc := &peakClient{Client: cl}
+	tree, stats := xp.BuildTree(ctx, pc, root)
+	if peak := pc.peak.Load(); peak < 2 {
+		t.Fatalf("at most %d Get in flight against the real apiserver: the concurrent path never ran", peak)
+	}
+
+	if stats.Nodes != 1+len(refs) {
+		t.Fatalf("walked %d nodes, want %d (XR + every ref)", stats.Nodes, 1+len(refs))
+	}
+	if len(tree.Children) != len(refs) {
+		t.Fatalf("%d children, want %d", len(tree.Children), len(refs))
+	}
+	// Order is the refs' order, whatever order the fetches completed in.
+	for i, c := range tree.Children {
+		if want := refs[i]["name"]; c.Name != want {
+			t.Errorf("child %d is %q, want %q — the walk reordered its children", i, c.Name, want)
+		}
+	}
+	if c := tree.Children[12]; c.Error != "" || c.Namespace != ns {
+		t.Errorf("the namespace-less ref must inherit %q and resolve, got ns=%q err=%q", ns, c.Namespace, c.Error)
+	}
+	if c := tree.Children[13]; c.Error == "" {
+		t.Error("the dangling ref must be a NotFound error node")
+	}
+	for i, c := range tree.Children[:12] {
+		if c.Error != "" {
+			t.Errorf("leaf %d errored: %s", i, c.Error)
+		}
+	}
+}
+
+// peakClient forwards to a real *k8s.Client and records the peak number of Gets
+// in flight. The short hold keeps overlapping requests overlapping on a fast
+// local apiserver, so the peak is observable rather than a race against it.
+type peakClient struct {
+	*k8s.Client
+	cur, peak atomic.Int32
+}
+
+func (p *peakClient) Get(ctx context.Context, t k8s.Target, ns, name string) (*unstructured.Unstructured, error) {
+	n := p.cur.Add(1)
+	defer p.cur.Add(-1)
+	for {
+		prev := p.peak.Load()
+		if n <= prev || p.peak.CompareAndSwap(prev, n) {
+			break
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+	return p.Client.Get(ctx, t, ns, name)
 }

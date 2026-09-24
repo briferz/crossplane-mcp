@@ -357,6 +357,45 @@ See README "Releasing".
   `Progressing=False/ProgressDeadlineExceeded`, and once fixed returns to
   `Progressing=True/NewReplicaSetAvailable` — so the rule is correct as shipped
   and does not strand a recovered Deployment at Blocked.
+- **The tree walk is parallel; the DFS is untouched** (`internal/xp/tree.go`).
+  The DFS is order-dependent — the node budget is checked before each child
+  against every node built so far, and a resource reachable from two parents
+  lands under whichever DFS reaches first — so it is left exactly as it was,
+  including the loop resolving every ref itself. Only the Gets move:
+  `childFetcher` fetches the ref the loop is on plus the next few siblings
+  concurrently, in **windows** of `walkConcurrency` (10), and serves each from a
+  map keyed on **exactly `Get`'s inputs** (`Target`, ns, name); a miss falls
+  through to a real Get, so an entry can never substitute a different object.
+  - **Windowed, not all-at-once — a regression caught in review before merge.**
+    Prefetching every sibling the budget allowed up front meant that when an
+    early sibling was a composite whose subtree ate the budget, every later
+    prefetched sibling was discarded, at every ancestor: 5 nested levels of
+    "composite + 240 MRs" cost **985 Gets vs 199** — by arithmetic on QPS 50 /
+    burst 100, a ~18 s limiter floor against ~2 s, slower than sequential. Windows cap the loss at
+    `walkConcurrency-1` per ancestor (plus diamonds) at the same round count.
+    `TestParallelWalkWasteDoesNotCompound` pins the bound.
+  - **"Same output" is scoped:** identical tree and Stats given a cluster that
+    answers the same question the same way during the walk
+    (`TestParallelWalkMatchesSequential` compares full trees over randomized
+    graphs and asserts its corpus actually hits the node cap, depth cap, error
+    nodes and genuine diamonds). A window-mate is resolved twice (the ref a
+    window opens on only once), so a transient discovery failure seen only by
+    the window is overridden by
+    the loop's own Resolve — better than sequential, except that a window can
+    spend the client's rate-limited invalidation slot slightly earlier.
+  - `Resolve` is **not** memoised — a memo pins one transient discovery failure
+    onto every ref of that kind (mutation-tested: every such ref became an
+    unreachable, tier-1 node) — and within a walk it is never called
+    concurrently; only `Get` is.
+  - Latency: each composite costs ceil(fetchable children / 10) round-trips,
+    and a chain still costs one per level. Measured with a fake client at
+    10 ms/Get and **no rate limiter**: XR over 30 MRs 327→33 ms, nested
+    (5 XRs × 6) 383→66 ms, a chain whose levels each also own a leaf 219→110
+    ms. The client limiter (QPS 50 / burst 100) floors both walks past ~100
+    requests, so real gains on large trees are smaller. Diagnose also fetches
+    suspects' events concurrently.
+  - The next lever, prefetching sibling *subtrees* speculatively, was rejected:
+    global futures, starvation and leak risk, weakest in the capped case.
 - **Recurring failure mode: a check that reports success while being
   structurally unable to report failure.** Seen in an `e2e` label nobody had
   created (so its trigger could never fire), a `Stats.Nodes >= 3` assertion
