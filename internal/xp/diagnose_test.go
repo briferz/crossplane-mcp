@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 // asked about, and returns a configurable event set: when events is nil it falls
 // back to a single benign Warning with Count 0 (below recurrenceThreshold, so it
 // never triggers event attribution — keeping pre-existing tests unchanged).
+// stubEvents is called concurrently: diagnose fetches suspects' events in
+// parallel, so the recording fields are guarded.
 type stubEvents struct {
+	mu        sync.Mutex
 	asked     []string
 	lastLimit int
 	events    []k8s.Event
@@ -22,8 +26,10 @@ type stubEvents struct {
 }
 
 func (s *stubEvents) Events(_ context.Context, _, uid string, limit int) ([]k8s.Event, error) {
+	s.mu.Lock()
 	s.asked = append(s.asked, uid)
 	s.lastLimit = limit
+	s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
 	}

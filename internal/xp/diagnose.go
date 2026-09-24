@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/briferz/crossplane-mcp/internal/k8s"
 )
@@ -264,6 +265,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 	// call: the same recurring TF blob mirrors up the composite chain, so it is
 	// surfaced once (on the first/deepest suspect that carries it).
 	seen := map[string]bool{}
+	eventsFor := prefetchEvents(ctx, ev, suspects)
 	for i, n := range suspects {
 		if i >= maxSuspects {
 			break
@@ -283,12 +285,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		if n.deletionTime != "" {
 			s.Finalizers = n.finalizers
 		}
-		var events []k8s.Event
-		if ev != nil {
-			if got, err := ev.Events(ctx, n.Namespace, n.uid, allEvents); err == nil {
-				events = got
-			}
-		}
+		events := eventsFor[i]
 		if i == 0 {
 			rootEvents = events // the root's full events, for the summary below
 		}
@@ -399,4 +396,35 @@ func walk(n *Node, fn func(*Node)) {
 	for _, c := range n.Children {
 		walk(c, fn)
 	}
+}
+
+// prefetchEvents fetches events for the suspects diagnose will actually report
+// — the first maxSuspects — concurrently, and returns them by suspect index.
+//
+// Same calls as the old in-loop fetch — the same suspects, the same arguments,
+// the same error handling (a failed lookup yields no events, never an error) —
+// only the waiting overlaps: up to ten round-trips that used to run one after
+// another. No semaphore: the
+// count is already bounded by maxSuspects, and a bounded-but-never-blocking one
+// only added a random skip under cancellation, which made the call set depend
+// on scheduling. Joined before returning, so nothing outlives it.
+func prefetchEvents(ctx context.Context, ev EventFetcher, suspects []*Node) [][]k8s.Event {
+	n := min(len(suspects), maxSuspects)
+	out := make([][]k8s.Event, n)
+	if ev == nil || n == 0 {
+		return out
+	}
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			node := suspects[i]
+			if got, err := ev.Events(ctx, node.Namespace, node.uid, allEvents); err == nil {
+				out[i] = got
+			}
+		}()
+	}
+	wg.Wait()
+	return out
 }
