@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/briferz/crossplane-mcp/compare/v0.8.3...v0.8.4) (2026-09-24)
+
+
+### Performance Improvements
+
+* **xp:** walk each composite's children concurrently, without touching the DFS ([#84](https://github.com/briferz/crossplane-mcp/issues/84)) ([d997c50](https://github.com/briferz/crossplane-mcp/commit/d997c50fcef6619d626a7b105e16445ce8d2327c))
+
 ## [0.8.3](https://github.com/briferz/crossplane-mcp/compare/v0.8.2...v0.8.3) (2026-09-20)
 
 
