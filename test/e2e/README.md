@@ -15,8 +15,8 @@ tags — one `go vet`, and no tag combination that compiles in CI but not locall
 | | Selected by | Has | Runs |
 |---|---|---|---|
 | **envtest** | default (needs `KUBEBUILDER_ASSETS`) | apiserver + etcd | every PR, ~11s |
-| **native** | `CLUSTER_E2E=1` + a kubeconfig | + controllers, kubelet | weekly cron, `workflow_dispatch`, or an `e2e` PR label |
-| **Crossplane** | `CROSSPLANE_E2E=1` + a kubeconfig | + Crossplane | same triggers |
+| **native** | `CLUSTER_E2E=1` + a kubeconfig | + controllers, kubelet | **every PR**, plus cron and `workflow_dispatch` |
+| **Crossplane** | `CROSSPLANE_E2E=1` + a kubeconfig | + Crossplane | weekly cron, `workflow_dispatch`, or an `e2e` PR label |
 
 They are ordered by how much can break underneath them. envtest depends on
 nothing external; native adds `kindest/node` and one pause image; Crossplane
