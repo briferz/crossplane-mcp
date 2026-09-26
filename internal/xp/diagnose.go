@@ -183,19 +183,77 @@ type Diagnosis struct {
 // flat trace, which leaves the user to spot the blocker themselves. Events are
 // fetched only for the top suspects, keeping the response token-light.
 func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, includeTree bool) *Diagnosis {
-	// Collect every non-Ready node, not just Blocked ones: a resource stuck
-	// Pending (Unknown/absent conditions) is still a problem and must not be
-	// reported as healthy. Also collect any resource being deleted even if its
-	// conditions still report Ready — a finalizer can wedge a teardown while the
-	// Ready condition lags, and a stuck termination must never be called healthy.
-	// StateUnknown nodes are excluded: a native Kubernetes resource composed by a
-	// v2 XR carries none of Ready/Synced/Healthy, so treating its silence as
-	// "pending" made every such resource a permanent suspect with empty reasons —
-	// and, being typically the deepest node, frequently the named root cause. A
-	// terminating one is still collected: a wedged teardown is real regardless of
-	// which condition vocabulary the object speaks.
-	var suspects []*Node
-	var unassessed int
+	suspects, unassessed := rankedSuspects(tree)
+
+	// Healthy means "no suspect found AND the whole tree was inspected". A capped
+	// walk cannot support the second half, and the resources it never reached are
+	// exactly where an unexplained failure would hide. Same philosophy as
+	// Classify's "no health conditions at all -> we can't assert readiness".
+	d := &Diagnosis{Healthy: len(suspects) == 0 && !stats.Capped, Stats: stats}
+	if includeTree {
+		d.Tree = tree.Flatten()
+	}
+
+	// Guarded on the suspect count, not d.Healthy: a capped-but-suspect-free tree
+	// is not healthy, and falling through would index suspects[0] and panic.
+	if len(suspects) == 0 {
+		d.Summary = noSuspectSummary(stats, unassessed)
+		if stats.Capped {
+			d.Summary += " " + cappedCaveat()
+		}
+		return d
+	}
+
+	var rootEvents []k8s.Event // the root suspect's full (untrimmed) events
+	// seen dedups byte-identical decoded provider errors across suspects in this
+	// call: the same recurring TF blob mirrors up the composite chain, so it is
+	// surfaced once (on the first/deepest suspect that carries it).
+	seen := map[string]bool{}
+	eventsFor := prefetchEvents(ctx, ev, suspects)
+	for i, n := range suspects {
+		if i >= maxSuspects {
+			break
+		}
+		if i == 0 {
+			rootEvents = eventsFor[i] // the root's full events, for the summary below
+		}
+		d.Suspects = append(d.Suspects, buildSuspect(n, eventsFor[i], seen))
+	}
+
+	root := suspects[0]
+	d.Summary = fmt.Sprintf("%s resource(s); likely root cause: %s %q (%s, depth %d).",
+		lifecycleCounts(suspects), root.Kind, root.Name, root.APIVersion, root.depth)
+
+	msg, fromEvent := rootCauseMessage(root, rootEvents)
+	if msg != "" {
+		d.Summary += " " + msg
+	}
+	// When a genuine condition led but a hot loop is also recurring, point at it
+	// so the agent never misses the persistent failure behind the symptom.
+	if e, ok := qualifyingEvent(rootEvents); ok && !fromEvent {
+		d.Summary += fmt.Sprintf(" Recurring event: %s (x%d).", e.Reason, e.Count)
+	}
+	// The ranking above ran over a partial tree, so the named root cause may not
+	// be the real one — say so rather than presenting it with full confidence.
+	if stats.Capped {
+		d.Summary += " " + cappedCaveat()
+	}
+	return d
+}
+
+// rankedSuspects collects every non-Ready node, not just Blocked ones: a
+// resource stuck Pending (Unknown/absent conditions) is still a problem and must
+// not be reported as healthy. It also collects any resource being deleted even
+// if its conditions still report Ready — a finalizer can wedge a teardown while
+// the Ready condition lags, and a stuck termination must never be called
+// healthy. StateUnknown nodes are excluded (and counted as unassessed): a native
+// Kubernetes resource composed by a v2 XR carries none of Ready/Synced/Healthy,
+// so treating its silence as "pending" made every such resource a permanent
+// suspect with empty reasons — and, being typically the deepest node,
+// frequently the named root cause. A terminating one is still collected: a
+// wedged teardown is real regardless of which condition vocabulary the object
+// speaks.
+func rankedSuspects(tree *Node) (suspects []*Node, unassessed int) {
 	walk(tree, func(n *Node) {
 		if n.State == StateUnknown {
 			unassessed++
@@ -217,37 +275,26 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 		}
 		return suspects[i].depth > suspects[j].depth
 	})
+	return suspects, unassessed
+}
 
-	// Healthy means "no suspect found AND the whole tree was inspected". A capped
-	// walk cannot support the second half, and the resources it never reached are
-	// exactly where an unexplained failure would hide. Same philosophy as
-	// Classify's "no health conditions at all -> we can't assert readiness".
-	d := &Diagnosis{Healthy: len(suspects) == 0 && !stats.Capped, Stats: stats}
-	if includeTree {
-		d.Tree = tree.Flatten()
+// noSuspectSummary is the headline when nothing is failing. It doesn't claim
+// readiness the server cannot assert: if some resources carry no health
+// vocabulary, it says how many rather than folding them into an "All N are
+// Ready" that would be false.
+func noSuspectSummary(stats Stats, unassessed int) string {
+	if unassessed > 0 {
+		return fmt.Sprintf(
+			"No blocking or pending conditions found across %d resource(s); %d of them report no Crossplane health conditions (native Kubernetes resources) and were not assessed for readiness.",
+			stats.Nodes, unassessed)
 	}
+	return fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
+}
 
-	// Guarded on the suspect count, not d.Healthy: a capped-but-suspect-free tree
-	// is not healthy, and falling through would index suspects[0] and panic.
-	if len(suspects) == 0 {
-		// Don't claim readiness the server cannot assert: if some resources carry
-		// no health vocabulary, say how many rather than folding them into an
-		// "All N are Ready" that would be false.
-		if unassessed > 0 {
-			d.Summary = fmt.Sprintf(
-				"No blocking or pending conditions found across %d resource(s); %d of them report no Crossplane health conditions (native Kubernetes resources) and were not assessed for readiness.",
-				stats.Nodes, unassessed)
-		} else {
-			d.Summary = fmt.Sprintf("All %d resource(s) in the tree are Ready; no blocking or pending conditions found.", stats.Nodes)
-		}
-		if stats.Capped {
-			d.Summary += " " + cappedCaveat()
-		}
-		return d
-	}
-
-	// Count by lifecycle so the headline matches each suspect's Lifecycle label: a
-	// resource being deleted is "terminating", not a pending create.
+// lifecycleCounts counts suspects by lifecycle so the headline matches each
+// suspect's Lifecycle label: a resource being deleted is "terminating", not a
+// pending create.
+func lifecycleCounts(suspects []*Node) string {
 	var blocked, pending, terminating int
 	for _, n := range suspects {
 		switch {
@@ -259,87 +306,77 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			pending++
 		}
 	}
-
-	var rootEvents []k8s.Event // the root suspect's full (untrimmed) events
-	// seen dedups byte-identical decoded provider errors across suspects in this
-	// call: the same recurring TF blob mirrors up the composite chain, so it is
-	// surfaced once (on the first/deepest suspect that carries it).
-	seen := map[string]bool{}
-	eventsFor := prefetchEvents(ctx, ev, suspects)
-	for i, n := range suspects {
-		if i >= maxSuspects {
-			break
-		}
-		s := Suspect{
-			APIVersion:        n.APIVersion,
-			Kind:              n.Kind,
-			Name:              n.Name,
-			Namespace:         n.Namespace,
-			Depth:             n.depth,
-			Health:            n.Health,
-			DeletionTimestamp: n.deletionTime,
-			Lifecycle:         lifecycleLabel(n, nowFn()),
-			Paused:            n.paused,
-			Error:             n.Error,
-		}
-		if n.deletionTime != "" {
-			s.Finalizers = n.finalizers
-		}
-		events := eventsFor[i]
-		if i == 0 {
-			rootEvents = events // the root's full events, for the summary below
-		}
-		// Build reasons from the full fetched set so a recurring composition
-		// event is found even when a burst of one-shot events fills the newest
-		// window — and, when the condition is just a transport flake, lead the
-		// reasons (see reasonsWithEvent). Surface only a trimmed set to stay
-		// token-light.
-		// leadFirst puts the first genuine condition ahead of any transport flake
-		// the controller happened to write first; decodeTFErrors is order-
-		// insensitive and attribute is idempotent under it.
-		condMsgs := leadFirst(causeMessages(n))
-		s.Reasons = reasonsWithEvent(condMsgs, events)
-		// Only once conditions AND events have both produced nothing: name the
-		// bare state rather than shipping a suspect with an empty explanation.
-		// Applied here, not inside causeMessages, so it cannot pre-empt the
-		// recurring-event attribution above (see bareStateMessages).
-		if len(s.Reasons) == 0 {
-			s.Reasons = bareStateMessages(n)
-		}
-		// A node the walk never fetched has no conditions and no events, so the
-		// fetch error is the only explanation that exists. Without this the
-		// suspect is a bare kind/name with empty reasons — and error nodes are
-		// often the deepest, so it is frequently named the root cause.
-		if n.Error != "" {
-			s.Reasons = append([]string{unreachablePrefix + n.Error}, s.Reasons...)
-		}
-		// A pause gates everything else in Reasons — no condition can change and
-		// no finalizer can run while it is set — so it always reads first.
-		if n.paused {
-			s.Reasons = append([]string{pausedReason}, s.Reasons...)
-		}
-		s.Events = trimEvents(events)
-		// Additively surface any decoded provider-terraform/OpenTofu error blob.
-		// The verbatim condition message stays untouched in Reasons (the literal
-		// "… | base64 -d | gunzip" hint included); this only adds the decoded,
-		// actionable form alongside it.
-		s.DecodedErrors = decodeTFErrors(condMsgs, events, seen)
-		d.Suspects = append(d.Suspects, s)
-	}
-
-	root := suspects[0]
 	counts := fmt.Sprintf("%d blocking, %d pending", blocked, pending)
 	if terminating > 0 {
 		counts += fmt.Sprintf(", %d terminating", terminating)
 	}
-	d.Summary = fmt.Sprintf("%s resource(s); likely root cause: %s %q (%s, depth %d).",
-		counts, root.Kind, root.Name, root.APIVersion, root.depth)
+	return counts
+}
 
-	// Attribute over the root's full events (not the trimmed s.Events) so the
-	// summary's cause matches the reasons even when the qualifying event fell
-	// outside the surfaced window. attribute prefers a recurring composition
-	// event over a transport-flake condition; otherwise it returns the condition
-	// message, preserving the previous behaviour exactly.
+// buildSuspect renders one ranked node, with its full fetched events, as a
+// Suspect. seen is shared across the call (see Diagnose).
+func buildSuspect(n *Node, events []k8s.Event, seen map[string]bool) Suspect {
+	s := Suspect{
+		APIVersion:        n.APIVersion,
+		Kind:              n.Kind,
+		Name:              n.Name,
+		Namespace:         n.Namespace,
+		Depth:             n.depth,
+		Health:            n.Health,
+		DeletionTimestamp: n.deletionTime,
+		Lifecycle:         lifecycleLabel(n, nowFn()),
+		Paused:            n.paused,
+		Error:             n.Error,
+	}
+	if n.deletionTime != "" {
+		s.Finalizers = n.finalizers
+	}
+	// Build reasons from the full fetched set so a recurring composition
+	// event is found even when a burst of one-shot events fills the newest
+	// window — and, when the condition is just a transport flake, lead the
+	// reasons (see reasonsWithEvent). Surface only a trimmed set to stay
+	// token-light.
+	// leadFirst puts the first genuine condition ahead of any transport flake
+	// the controller happened to write first; decodeTFErrors is order-
+	// insensitive and attribute is idempotent under it.
+	condMsgs := leadFirst(causeMessages(n))
+	s.Reasons = reasonsWithEvent(condMsgs, events)
+	// Only once conditions AND events have both produced nothing: name the
+	// bare state rather than shipping a suspect with an empty explanation.
+	// Applied here, not inside causeMessages, so it cannot pre-empt the
+	// recurring-event attribution above (see bareStateMessages).
+	if len(s.Reasons) == 0 {
+		s.Reasons = bareStateMessages(n)
+	}
+	// A node the walk never fetched has no conditions and no events, so the
+	// fetch error is the only explanation that exists. Without this the
+	// suspect is a bare kind/name with empty reasons — and error nodes are
+	// often the deepest, so it is frequently named the root cause.
+	if n.Error != "" {
+		s.Reasons = append([]string{unreachablePrefix + n.Error}, s.Reasons...)
+	}
+	// A pause gates everything else in Reasons — no condition can change and
+	// no finalizer can run while it is set — so it always reads first.
+	if n.paused {
+		s.Reasons = append([]string{pausedReason}, s.Reasons...)
+	}
+	s.Events = trimEvents(events)
+	// Additively surface any decoded provider-terraform/OpenTofu error blob.
+	// The verbatim condition message stays untouched in Reasons (the literal
+	// "… | base64 -d | gunzip" hint included); this only adds the decoded,
+	// actionable form alongside it.
+	s.DecodedErrors = decodeTFErrors(condMsgs, events, seen)
+	return s
+}
+
+// rootCauseMessage explains the root suspect for the headline, reporting
+// whether the explanation came from a recurring event.
+//
+// It attributes over the root's full events (not the trimmed Suspect.Events) so
+// the summary's cause matches the reasons even when the qualifying event fell
+// outside the surfaced window. attribute prefers a recurring composition event
+// over a transport-flake condition; otherwise it returns the condition message.
+func rootCauseMessage(root *Node, rootEvents []k8s.Event) (string, bool) {
 	msg, fromEvent := attribute(causeMessages(root), rootEvents)
 	// An unreachable root has no conditions and no events to attribute over, so
 	// without this the headline names a suspect and then explains nothing.
@@ -354,20 +391,7 @@ func Diagnose(ctx context.Context, ev EventFetcher, tree *Node, stats Stats, inc
 			msg = bare[0]
 		}
 	}
-	if msg != "" {
-		d.Summary += " " + msg
-	}
-	// When a genuine condition led but a hot loop is also recurring, point at it
-	// so the agent never misses the persistent failure behind the symptom.
-	if e, ok := qualifyingEvent(rootEvents); ok && !fromEvent {
-		d.Summary += fmt.Sprintf(" Recurring event: %s (x%d).", e.Reason, e.Count)
-	}
-	// The ranking above ran over a partial tree, so the named root cause may not
-	// be the real one — say so rather than presenting it with full confidence.
-	if stats.Capped {
-		d.Summary += " " + cappedCaveat()
-	}
-	return d
+	return msg, fromEvent
 }
 
 // rankTier orders a suspect by how actionable it is for root-cause ranking: a

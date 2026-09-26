@@ -162,31 +162,8 @@ type PackagesResult struct {
 func BuildPackages(pkgs, revs []k8s.Listed, p PackagesParams) *PackagesResult {
 	res := &PackagesResult{}
 
-	byName := map[string]int{}
-	byUID := map[string]int{}
-	for i := range pkgs {
-		obj := &pkgs[i].Object
-		byName[obj.GetName()] = i
-		if uid := string(obj.GetUID()); uid != "" {
-			byUID[uid] = i
-		}
-	}
-
-	// Correlate revisions to their parent package. Orphans (parent filtered by
-	// RBAC, label/ownerRef stripped, or mid-deletion) become a note, never a
-	// row — a revision is meaningless without its package context.
-	matched := map[int][]int{}
-	var orphans []string
-	for j := range revs {
-		obj := &revs[j].Object
-		if i, ok := parentIndex(obj, pkgs, byName, byUID); ok {
-			matched[i] = append(matched[i], j)
-		} else {
-			orphans = append(orphans, obj.GetName())
-		}
-	}
+	matched, orphans := correlateRevisions(pkgs, revs)
 	if len(orphans) > 0 {
-		sort.Strings(orphans)
 		res.Notes = append(res.Notes, fmt.Sprintf(
 			"%d revision(s) matched no listed package: %s (parent unreadable, deleted, or label/ownerRef stripped)",
 			len(orphans), strings.Join(orphans, ", ")))
@@ -224,57 +201,7 @@ func BuildPackages(pkgs, revs []k8s.Listed, p PackagesParams) *PackagesResult {
 			continue
 		}
 
-		row := PackageRow{
-			APIVersion:      obj.GetAPIVersion(),
-			Kind:            obj.GetKind(),
-			Name:            obj.GetName(),
-			Package:         pkgRef,
-			State:           state,
-			Installed:       byType(conds, TypeInstalled),
-			Healthy:         byType(conds, TypeHealthy),
-			Synced:          byType(conds, TypeSynced),
-			Paused:          IsPaused(obj),
-			CurrentRevision: nestedStr(obj, "status", "currentRevision"),
-			Reasons:         blockingMessages(conds),
-			uid:             string(obj.GetUID()),
-		}
-		if pol := nestedStr(obj, "spec", "revisionActivationPolicy"); pol == "Manual" {
-			row.ActivationPolicy = pol
-		}
-		if id := nestedStr(obj, "status", "currentIdentifier"); id != "" && id != pkgRef {
-			row.CurrentIdentifier = id
-		}
-		if rp := nestedStr(obj, "status", "resolvedPackage"); rp != "" && rp != pkgRef {
-			row.ResolvedPackage = rp
-		}
-
-		// Lifecycle via the shared label logic; a package that never came up is
-		// "Installing", not "Creating".
-		ln := &Node{
-			State:        state,
-			Conditions:   conds,
-			deletionTime: deletionTime(obj),
-			creationTime: metaTimeString(obj.GetCreationTimestamp()),
-			paused:       row.Paused,
-		}
-		row.Lifecycle = lifecycleLabelFor(ln, nowFn(), "Installing")
-		if ln.deletionTime != "" {
-			row.DeletionTimestamp = ln.deletionTime
-			row.Finalizers = obj.GetFinalizers()
-		}
-
-		var rows []RevisionRow
-		if p.RevisionsListed {
-			rows = buildRevisionRows(revs, matched[i], pkgRef, row.CurrentRevision)
-			count := len(rows)
-			row.RevisionCount = &count
-			if includeRevisions(state, rows) {
-				row.Revisions, row.RevisionsTruncated = capRevisionRows(rows)
-			}
-		}
-		row.Skew = skewSentences(obj, &row, rows, p.RevisionsListed)
-
-		items = append(items, row)
+		items = append(items, buildPackageRow(obj, pkgRef, conds, state, revs, matched[i], p.RevisionsListed))
 	}
 
 	sort.SliceStable(items, func(a, b int) bool {
@@ -293,13 +220,109 @@ func BuildPackages(pkgs, revs []k8s.Listed, p PackagesParams) *PackagesResult {
 		res.Truncated = true
 	}
 
-	// Full enrichment is reserved for the rows an agent acts on first. In a
-	// mass failure (a registry outage breaks every provider at once) enriching
-	// every row would blow the response to hundreds of KiB; beyond the first
-	// maxDetailedPackages failing rows the row goes compact — identity,
-	// statuses, lifecycle, and counts stay; reasons/skew/revisions are dropped
-	// whole (never clipped) and the note names the drill-down path. Runs after
-	// the Limit cut so the note counts rows actually shipped.
+	// Runs after the Limit cut so the note counts rows actually shipped.
+	if compact := compactBeyondDetailed(items); compact > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"full detail (reasons, skew, revisions) included for the first %d failing packages only; %d more failing rows are compact — re-call with the name filter for one package's full detail",
+			maxDetailedPackages, compact))
+	}
+
+	res.Items = items
+	return res
+}
+
+// correlateRevisions maps each package index to the indexes of its revisions.
+// Orphans (parent filtered by RBAC, label/ownerRef stripped, or mid-deletion)
+// are returned by name, sorted, to become a note — never a row: a revision is
+// meaningless without its package context.
+func correlateRevisions(pkgs, revs []k8s.Listed) (matched map[int][]int, orphans []string) {
+	byName := map[string]int{}
+	byUID := map[string]int{}
+	for i := range pkgs {
+		obj := &pkgs[i].Object
+		byName[obj.GetName()] = i
+		if uid := string(obj.GetUID()); uid != "" {
+			byUID[uid] = i
+		}
+	}
+
+	matched = map[int][]int{}
+	for j := range revs {
+		obj := &revs[j].Object
+		if i, ok := parentIndex(obj, pkgs, byName, byUID); ok {
+			matched[i] = append(matched[i], j)
+		} else {
+			orphans = append(orphans, obj.GetName())
+		}
+	}
+	sort.Strings(orphans)
+	return matched, orphans
+}
+
+// buildPackageRow renders one package, with its correlated revisions (revIdx
+// into revs), as a fully enriched row.
+func buildPackageRow(obj *unstructured.Unstructured, pkgRef string, conds []Condition, state string,
+	revs []k8s.Listed, revIdx []int, revisionsListed bool) PackageRow {
+	row := PackageRow{
+		APIVersion:      obj.GetAPIVersion(),
+		Kind:            obj.GetKind(),
+		Name:            obj.GetName(),
+		Package:         pkgRef,
+		State:           state,
+		Installed:       byType(conds, TypeInstalled),
+		Healthy:         byType(conds, TypeHealthy),
+		Synced:          byType(conds, TypeSynced),
+		Paused:          IsPaused(obj),
+		CurrentRevision: nestedStr(obj, "status", "currentRevision"),
+		Reasons:         blockingMessages(conds),
+		uid:             string(obj.GetUID()),
+	}
+	if pol := nestedStr(obj, "spec", "revisionActivationPolicy"); pol == "Manual" {
+		row.ActivationPolicy = pol
+	}
+	if id := nestedStr(obj, "status", "currentIdentifier"); id != "" && id != pkgRef {
+		row.CurrentIdentifier = id
+	}
+	if rp := nestedStr(obj, "status", "resolvedPackage"); rp != "" && rp != pkgRef {
+		row.ResolvedPackage = rp
+	}
+
+	// Lifecycle via the shared label logic; a package that never came up is
+	// "Installing", not "Creating".
+	ln := &Node{
+		State:        state,
+		Conditions:   conds,
+		deletionTime: deletionTime(obj),
+		creationTime: metaTimeString(obj.GetCreationTimestamp()),
+		paused:       row.Paused,
+	}
+	row.Lifecycle = lifecycleLabelFor(ln, nowFn(), "Installing")
+	if ln.deletionTime != "" {
+		row.DeletionTimestamp = ln.deletionTime
+		row.Finalizers = obj.GetFinalizers()
+	}
+
+	var rows []RevisionRow
+	if revisionsListed {
+		rows = buildRevisionRows(revs, revIdx, pkgRef, row.CurrentRevision)
+		count := len(rows)
+		row.RevisionCount = &count
+		if includeRevisions(state, rows) {
+			row.Revisions, row.RevisionsTruncated = capRevisionRows(rows)
+		}
+	}
+	row.Skew = skewSentences(obj, &row, rows, revisionsListed)
+	return row
+}
+
+// compactBeyondDetailed reserves full enrichment for the rows an agent acts on
+// first, and returns how many failing rows it compacted. In a mass failure (a
+// registry outage breaks every provider at once) enriching every row would blow
+// the response to hundreds of KiB; beyond the first maxDetailedPackages failing
+// rows the row goes compact — identity, statuses, lifecycle, and counts stay;
+// reasons/skew/revisions are dropped whole (never clipped) and the caller's note
+// names the drill-down path.
+func compactBeyondDetailed(items []PackageRow) int {
 	detailed, compact := 0, 0
 	for i := range items {
 		if items[i].State == StateReady {
@@ -315,14 +338,7 @@ func BuildPackages(pkgs, revs []k8s.Listed, p PackagesParams) *PackagesResult {
 		items[i].Revisions = nil
 		items[i].RevisionsTruncated = false
 	}
-	if compact > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf(
-			"full detail (reasons, skew, revisions) included for the first %d failing packages only; %d more failing rows are compact — re-call with the name filter for one package's full detail",
-			maxDetailedPackages, compact))
-	}
-
-	res.Items = items
-	return res
+	return compact
 }
 
 // classifyAll reduces a condition set to a state by folding over ALL
@@ -506,18 +522,7 @@ func skewSentences(obj *unstructured.Unstructured, row *PackageRow, rows []Revis
 		return skew
 	}
 
-	active := 0
-	activeName := ""
-	var current *RevisionRow
-	for i := range rows {
-		if rows[i].DesiredState == "Active" {
-			active++
-			activeName = rows[i].Name
-		}
-		if rows[i].Current {
-			current = &rows[i]
-		}
-	}
+	active, activeName, current := tallyRevisions(rows)
 
 	if row.ActivationPolicy == "Manual" && current != nil && current.DesiredState == "Inactive" {
 		s := fmt.Sprintf("awaiting manual approval: current revision %s is Inactive (revisionActivationPolicy: Manual)", current.Name)
@@ -541,12 +546,7 @@ func skewSentences(obj *unstructured.Unstructured, row *PackageRow, rows []Revis
 	if active > 1 {
 		skew = append(skew, fmt.Sprintf("anomalous: %d revisions are Active simultaneously", active))
 	}
-	limit, hasLimit := nestedI64OK(obj, "spec", "revisionHistoryLimit")
-	if !hasLimit {
-		limit = 1 // the API default
-	}
-	// limit 0 disables GC on purpose — piling up revisions is then expected.
-	if limit > 0 && int64(len(rows)) > limit+1 {
+	if gcLagging(obj, len(rows)) {
 		skew = append(skew, fmt.Sprintf(
 			"revision garbage collection lagging: %d revisions exceed revisionHistoryLimit+1 — check GarbageCollect warning events",
 			len(rows)))
@@ -559,6 +559,32 @@ func skewSentences(obj *unstructured.Unstructured, row *PackageRow, rows []Revis
 			current.Name, current.State))
 	}
 	return skew
+}
+
+// tallyRevisions counts the revisions whose desired state is Active, names the
+// last of them, and finds the current revision (nil if none is marked).
+func tallyRevisions(rows []RevisionRow) (active int, activeName string, current *RevisionRow) {
+	for i := range rows {
+		if rows[i].DesiredState == "Active" {
+			active++
+			activeName = rows[i].Name
+		}
+		if rows[i].Current {
+			current = &rows[i]
+		}
+	}
+	return active, activeName, current
+}
+
+// gcLagging reports whether a package keeps more revisions than its
+// revisionHistoryLimit allows (limit+1, the current one included).
+func gcLagging(obj *unstructured.Unstructured, revisions int) bool {
+	limit, hasLimit := nestedI64OK(obj, "spec", "revisionHistoryLimit")
+	if !hasLimit {
+		limit = 1 // the API default
+	}
+	// limit 0 disables GC on purpose — piling up revisions is then expected.
+	return limit > 0 && int64(revisions) > limit+1
 }
 
 // maxDetailedPackages caps how many failing packages get the full treatment —
