@@ -133,6 +133,7 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 
 // --- list_unhealthy ---
 
+// ListUnhealthyInput is the input to list_unhealthy.
 type ListUnhealthyInput struct {
 	Namespace      string `json:"namespace,omitempty" jsonschema:"limit the scan to one namespace (namespaced XRs/claims only); omit to scan cluster-wide where RBAC allows. Cluster-scoped v1 XRs are skipped when this is set"`
 	Category       string `json:"category,omitempty" jsonschema:"which Crossplane discovery category to scan: composite (XRs), claim (v1 claims), or managed (provider managed resources). Omit to scan composite and claim"`
@@ -141,6 +142,8 @@ type ListUnhealthyInput struct {
 	Limit          int    `json:"limit,omitempty" jsonschema:"max items to return (default 100, hard cap 500); truncated is true in the output when more matched"`
 }
 
+// ListUnhealthyOutput is list_unhealthy's result. Summary and Scanned are
+// pre-cap totals, so they stay accurate when Items is truncated.
 type ListUnhealthyOutput struct {
 	Items     []xp.UnhealthyItem  `json:"items,omitempty"`
 	Summary   xp.UnhealthySummary `json:"summary"`
@@ -201,6 +204,7 @@ func clampLimit(n int) int {
 
 // --- diagnose ---
 
+// DiagnoseInput is the input to diagnose.
 type DiagnoseInput struct {
 	Kind        string `json:"kind" jsonschema:"resource kind, e.g. XPostgreSQLInstance, Bucket, or a Claim kind"`
 	Name        string `json:"name" jsonschema:"resource name"`
@@ -222,6 +226,7 @@ func diagnoseHandler(cl *k8s.Client) mcp.ToolHandlerFor[DiagnoseInput, *xp.Diagn
 
 // --- get_resource_tree ---
 
+// TreeInput is the input to get_resource_tree.
 type TreeInput struct {
 	Kind       string `json:"kind" jsonschema:"resource kind to root the tree at"`
 	Name       string `json:"name" jsonschema:"resource name"`
@@ -229,6 +234,9 @@ type TreeInput struct {
 	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace; required for namespaced kinds, omit for cluster-scoped ones"`
 }
 
+// TreeOutput is get_resource_tree's result: the walked tree flattened
+// depth-first, plus the walk's Stats (including whether a traversal cap cut it
+// short).
 type TreeOutput struct {
 	Nodes []xp.FlatNode `json:"nodes"`
 	Stats xp.Stats      `json:"stats"`
@@ -247,6 +255,7 @@ func treeHandler(cl *k8s.Client) mcp.ToolHandlerFor[TreeInput, *TreeOutput] {
 
 // --- get_resource ---
 
+// GetResourceInput is the input to get_resource.
 type GetResourceInput struct {
 	Kind       string `json:"kind" jsonschema:"resource kind"`
 	Name       string `json:"name" jsonschema:"resource name"`
@@ -254,6 +263,16 @@ type GetResourceInput struct {
 	Namespace  string `json:"namespace,omitempty" jsonschema:"namespace; required for namespaced kinds, omit for cluster-scoped ones"`
 }
 
+// ResourceView is get_resource's result. It is a CLOSED projection — named
+// fields built from the object's metadata, classified state, conditions, recent
+// events and spec — never the raw object. That keeps a core/v1 Secret's contents
+// out: a Secret holds data and stringData at top level, outside spec, so no
+// field here can carry them. TestSecretContentsNeverReturned pins that, and a
+// populated raw-object field would fail it.
+//
+// It does NOT keep secret material out of other kinds' spec, which is returned
+// as-is: a provider-kubernetes Object whose manifest is a Secret, or a Release
+// with inline values, comes back with that material.
 type ResourceView struct {
 	APIVersion string    `json:"apiVersion"`
 	Kind       string    `json:"kind"`
@@ -307,12 +326,24 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 
 // --- list_contexts ---
 
+// ContextsInput is the (empty) input to list_contexts.
 type ContextsInput struct{}
 
+// ContextsOutput is list_contexts' result. InCluster is true when the server is
+// running on in-cluster config, so there are no kubeconfig contexts to list.
 type ContextsOutput struct {
 	Contexts  []k8s.ContextInfo `json:"contexts"`
 	InCluster bool              `json:"inCluster,omitempty"`
 }
+
+// inCluster reports whether the server is running on in-cluster config. It keys
+// on "no contexts", not on a nil slice: in an ordinary pod client-go resolves
+// in-cluster config through the kubeconfig loader itself, so Contexts returns an
+// EMPTY, non-nil slice there. Testing for nil reported false in exactly the
+// case the field exists for, and true only when kubeconfig loading had failed.
+// A successfully built Client with zero contexts can only be in-cluster: an
+// empty kubeconfig without in-cluster config fails to build at all.
+func inCluster(ctxs []k8s.ContextInfo) bool { return len(ctxs) == 0 }
 
 func contextsHandler(cl *k8s.Client) mcp.ToolHandlerFor[ContextsInput, *ContextsOutput] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, _ ContextsInput) (*mcp.CallToolResult, *ContextsOutput, error) {
@@ -320,7 +351,7 @@ func contextsHandler(cl *k8s.Client) mcp.ToolHandlerFor[ContextsInput, *Contexts
 		if err != nil {
 			return nil, nil, err
 		}
-		return nil, &ContextsOutput{Contexts: ctxs, InCluster: ctxs == nil}, nil
+		return nil, &ContextsOutput{Contexts: ctxs, InCluster: inCluster(ctxs)}, nil
 	}
 }
 

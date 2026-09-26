@@ -23,7 +23,9 @@ import (
 // TestRegisterAllToolsSchemas guards that every tool's input/output schema is
 // inference-safe: the SDK's schema inferer rejects recursive Go types, so a bad
 // output struct would panic here. No cluster access happens during registration.
-func TestRegisterAllToolsSchemas(t *testing.T) {
+// It asserts by not panicking: schema inference panics on a bad output type, so
+// there is nothing for t to check.
+func TestRegisterAllToolsSchemas(_ *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	Register(s, &k8s.Client{}, nil)
 }
@@ -356,6 +358,27 @@ func TestClampLimit(t *testing.T) {
 	for _, c := range cases {
 		if got := clampLimit(c.in); got != c.want {
 			t.Errorf("clampLimit(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// list_contexts reports InCluster when there are no contexts to list. Keying
+// on nil instead reported false in an ordinary pod, where client-go resolves
+// in-cluster config through the kubeconfig loader and Contexts returns an
+// empty, non-nil slice (see k8s TestContextsOfAnEmptyKubeconfigIsEmptyNotNil).
+func TestInClusterKeysOnNoContextsNotNil(t *testing.T) {
+	cases := []struct {
+		name string
+		ctxs []k8s.ContextInfo
+		want bool
+	}{
+		{"nil: kubeconfig load failed, in-cluster fallback", nil, true},
+		{"empty non-nil: an ordinary pod", []k8s.ContextInfo{}, true},
+		{"kubeconfig with contexts", []k8s.ContextInfo{{Name: "dev"}}, false},
+	}
+	for _, c := range cases {
+		if got := inCluster(c.ctxs); got != c.want {
+			t.Errorf("%s: inCluster = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

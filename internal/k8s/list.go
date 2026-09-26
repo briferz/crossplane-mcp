@@ -134,15 +134,6 @@ func matchCategory(have, want []string) string {
 	return ""
 }
 
-// ListAll lists every kind with per-type partial-failure tolerance. A namespaced
-// kind is listed within namespace (or across all namespaces when namespace is
-// empty); a cluster-scoped kind is listed cluster-wide, and skipped with a note
-// when a namespace filter is set (a namespace cannot scope something that has
-// none). A forbidden or not-found type is recorded in Notes and skipped — a
-// single type's error is never returned as the call's error, so a least-
-// privilege role still gets whatever it can read.
-//
-// Read-only: issues only dynamic List requests.
 // ProjectTriageFields trims a listed object down to the fields triage reads,
 // replacing its map rather than deleting keys so the discarded bulk is actually
 // released. Listing cluster-wide retains every object before any cap applies, and
@@ -192,11 +183,23 @@ func ProjectTriageFields(o *unstructured.Unstructured) {
 // because ProjectTriageFields must retain it; xp.IsPaused is the reader.
 const PausedAnnotation = "crossplane.io/paused"
 
-// ListAll pages every kind into memory. project, when non-nil, trims each object
-// as it arrives — see ProjectTriageFields. Paging deliberately runs to
-// completion rather than stopping at the caller's display limit: the pre-cap
+// ListAll lists every kind with per-type partial-failure tolerance. A namespaced
+// kind is listed within namespace (or across all namespaces when namespace is
+// empty); a cluster-scoped kind is listed cluster-wide, and skipped with a note
+// when a namespace filter is set (a namespace cannot scope something that has
+// none). Any per-type List error — forbidden, not found, or a transport error
+// that outlasted the retries — is recorded in Notes and that type is abandoned,
+// keeping objects from pages already fetched. A single type's error is never
+// returned as the call's error, so a least-privilege role still gets whatever
+// it can read. A cancelled context stops the listing early, with a note.
+//
+// Each kind listed is paged into memory. project, when non-nil, trims each object as
+// it arrives — see ProjectTriageFields. Paging deliberately runs to completion
+// rather than stopping at the caller's display limit: the pre-cap
 // Scanned/Summary totals and the global Blocked-before-Pending ordering both
 // require seeing everything.
+//
+// Read-only: issues only dynamic List requests.
 func (c *Client) ListAll(ctx context.Context, kinds []CompositeKind, namespace string, project func(*unstructured.Unstructured)) ListResult {
 	var res ListResult
 	for _, k := range kinds {

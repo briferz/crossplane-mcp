@@ -18,12 +18,17 @@ import (
 // must never leak into the package tools.
 const packageGroup = "pkg.crossplane.io"
 
+// ListPackagesInput is the input shared by list_providers, list_functions and
+// list_configurations.
 type ListPackagesInput struct {
 	Name          string `json:"name,omitempty" jsonschema:"case-insensitive substring matched against the package object name AND its OCI image ref (spec.package) — e.g. 'aws-s3' matches both provider-aws-s3 and xpkg.upbound.io/upbound/provider-aws-s3:v1; omit to list all. Filtered-out packages are excluded from scanned/summary"`
 	UnhealthyOnly bool   `json:"unhealthyOnly,omitempty" jsonschema:"return only packages whose state is Blocked or Pending; default false returns every package — package counts are small, and seeing your suspect listed as Ready is itself the answer (look elsewhere)"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"max items to return (default 100, hard cap 500); truncated is true in the output when more matched. Revision rows per package are separately capped at 5 (revisionsTruncated), and in a mass failure only the first 10 failing packages carry full detail (reasons/skew/revisions/events) — further failing rows are compact, with a note; use name to drill into one"`
 }
 
+// ListPackagesOutput is the result of list_providers, list_functions and
+// list_configurations. Summary and Scanned are pre-cap totals (counted after
+// the name filter), so they stay accurate when Items is truncated.
 type ListPackagesOutput struct {
 	Items     []xp.PackageRow     `json:"items,omitempty"`
 	Summary   xp.UnhealthySummary `json:"summary"` // pre-cap package counts (revisions are attachments, never counted)

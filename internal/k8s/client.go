@@ -41,7 +41,11 @@ type Client struct {
 	Mapper meta.RESTMapper
 
 	// loader is the kubeconfig client config used to enumerate contexts. It is
-	// nil when running in-cluster (no kubeconfig contexts exist).
+	// NOT a reliable in-cluster signal: client-go's deferred loader falls back
+	// to in-cluster config INSIDE a successful ClientConfig() when the kubeconfig
+	// is empty, so in an ordinary pod loader is non-nil and simply has no
+	// contexts. It is nil only when kubeconfig loading failed outright and
+	// restConfig's own in-cluster fallback rescued it.
 	loader clientcmd.ClientConfig
 
 	// mu guards lastInvalidate, which rate-limits discovery-cache invalidation
