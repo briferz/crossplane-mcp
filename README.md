@@ -260,14 +260,18 @@ Disable all three with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`
 > **Sensitivity:** all three masks are **best-effort, not a guarantee.** The content
 > scrub is deliberately high-precision — it won't catch an arbitrary or
 > unusually-shaped secret, and it intentionally does **not** mask identifiers like
-> account IDs or ARNs (often the actionable detail). Redaction applies only to the
-> log, never to the live tool response; values that must stay hidden should be
-> marked `sensitive` in the Terraform/OpenTofu config. What gets logged is the
-> same closed projections the tools return — built from a resource's metadata,
-> spec, status, and events, never the raw object — and a Secret keeps its
-> `data`/`stringData` at top level, outside all of those, so Secret values never
-> reach the log either. (A Secret composed by an XR is still fetched during a
-> tree walk, like any other node; only its contents are withheld.) Treat the log
+> account IDs or ARNs (often the actionable detail). These masks apply only to the
+> log; values that must stay hidden should be marked `sensitive` in the
+> Terraform/OpenTofu config. What gets logged is the same closed projections the
+> tools return — built from a resource's metadata, spec, status, and events, never
+> the raw object — so a Secret's own `data`/`stringData` never reaches the log.
+> One redaction does apply to the live response as well: a Secret manifest
+> *embedded* in another resource's `spec` (a provider-kubernetes `Object`, a
+> Composition base) has its values replaced with `[redacted]`, keys kept. Other
+> free-form fields — Helm `values`, Terraform `vars`, templating functions'
+> inline templates — are returned and logged as written. (A Secret composed by an
+> XR is still fetched during a tree walk, like any other node; only its contents
+> are withheld.) Treat the log
 > as potentially sensitive and **review it before sharing off a machine that
 > touches production.**
 

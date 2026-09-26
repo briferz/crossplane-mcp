@@ -66,7 +66,9 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 		Description: "Fetch a single Kubernetes/Crossplane resource, pruned to its status conditions, " +
 			"recent events, and spec (noisy metadata like managedFields removed). Also surfaces " +
 			"paused (crossplane.io/paused) and, while the resource is terminating, its " +
-			"deletionTimestamp + finalizers.",
+			"deletionTimestamp + finalizers. A Secret manifest embedded in spec (e.g. a " +
+			"provider-kubernetes Object's manifest) has its data/stringData values shown as " +
+			"\"[redacted]\" — the keys are real, the values are not.",
 	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -270,9 +272,13 @@ type GetResourceInput struct {
 // field here can carry them. TestSecretContentsNeverReturned pins that, and a
 // populated raw-object field would fail it.
 //
-// It does NOT keep secret material out of other kinds' spec, which is returned
-// as-is: a provider-kubernetes Object whose manifest is a Secret, or a Release
-// with inline values, comes back with that material.
+// Spec is returned as-is, with one exception: a Secret manifest EMBEDDED in it
+// (a provider-kubernetes Object's manifest, a Composition base) is redacted by
+// redactEmbeddedSecrets before it gets here — see redact.go, including what
+// that deliberately does not cover (free-form and string-valued fields).
+// ResourceView has no status field, which is also what keeps a
+// provider-kubernetes Object's status.atProvider.manifest (a mirror of the live
+// Secret) out; exposing status would need the same redaction.
 type ResourceView struct {
 	APIVersion string    `json:"apiVersion"`
 	Kind       string    `json:"kind"`
@@ -301,6 +307,12 @@ func getResourceHandler(cl *k8s.Client) mcp.ToolHandlerFor[GetResourceInput, *Re
 		conds := xp.Conditions(obj)
 		health, state, _ := xp.ClassifyObject(obj)
 		spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
+		// Hard rule 3: spec can embed a whole Secret manifest (a
+		// provider-kubernetes Object, a Composition's resource bases). See
+		// redact.go for what is and is not redacted.
+		if spec != nil {
+			spec, _ = redactEmbeddedSecrets(spec).(map[string]any)
+		}
 
 		view := &ResourceView{
 			APIVersion: obj.GetAPIVersion(),
