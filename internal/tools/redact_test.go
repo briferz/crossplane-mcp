@@ -279,3 +279,26 @@ func TestRedactWriteOnlyArguments(t *testing.T) {
 		}
 	}
 }
+
+// A nested Terraform block can render as a list of objects, so a write-only
+// argument in a block may sit inside a list; and a write-only field whose value is not a plain
+// string must be replaced whole, not walked (walking returns strings unchanged).
+func TestRedactWriteOnlyArgumentsInBlocksAndNonStrings(t *testing.T) {
+	spec := map[string]any{"forProvider": map[string]any{
+		"block":     []any{map[string]any{"passwordWo": fixtureDataValue}},
+		"secretsWo": []any{fixtureStringValue},
+		"mapWo":     map[string]any{"k": fixtureDataValue},
+		"fooIDWo":   fixtureDataValue, // an acronym before "Wo" is still a write-only name
+		"unsetWo":   nil,              // unset stays unset, like data: null
+	}}
+	if out := mustNotLeak(t, redactEmbeddedSecrets(spec)); !strings.Contains(out, `"unsetWo":null`) {
+		t.Errorf("an unset write-only argument must stay null: %s", out)
+	}
+}
+
+// An apiVersion with an empty group is the core group too.
+func TestRedactEmptyGroupIsCore(t *testing.T) {
+	m := secretManifest()
+	m["apiVersion"] = "/v1"
+	mustNotLeak(t, redactEmbeddedSecrets(map[string]any{"manifest": m}))
+}

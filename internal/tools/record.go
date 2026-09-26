@@ -38,8 +38,10 @@ import (
 // gets logged is the same closed projections the tools return — built from a
 // resource's metadata, spec, status and events, never the raw object — so a
 // Secret's own data/stringData never reaches the log. The live response carries
-// one structural redaction of its own, which the log inherits: a Secret manifest
-// embedded in another resource's spec has its values replaced (redact.go). (A
+// structural redactions of its own, which the log inherits: in get_resource's
+// spec, an embedded Secret manifest's values, kubectl's last-applied copy of any
+// embedded object, and Terraform write-only (…Wo) arguments are replaced
+// (redact.go). (A
 // Secret composed by an XR is still fetched during a tree walk, like any other
 // node; only its contents are withheld.)
 // Treat the log as potentially sensitive and review it before sharing off a

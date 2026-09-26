@@ -24,15 +24,21 @@ import "strings"
 //     and on an object that embeds a Secret (a provider-kubernetes Object pasted
 //     into a Composition base) it duplicates the embedded Secret. It adds nothing
 //     diagnostic, since the object it copies is right there.
-//   - Terraform write-only arguments. Terraform marks arguments that carry a
-//     secret the provider must never persist with a `_wo` suffix, and upjet
-//     renders them into managed resources as plain string fields with a `Wo`
-//     suffix — provider-upjet-azure's Key Vault Secret `valueWo` and PostgreSQL
-//     `administratorPasswordWo`, shipped in v2.7.0. They are secret by
-//     definition, so under spec.forProvider / spec.initProvider a string field
-//     whose name ends in `Wo` at a camelCase boundary is replaced. This is a
-//     schema convention with one defined meaning, not a guess from a word like
-//     "password"; its `…WoVersion` companion is a number and is left alone.
+//   - Terraform write-only arguments. Terraform's marker is `WriteOnly: true` in
+//     a provider schema — values it never persists to state or plan — and by
+//     provider convention those arguments are named with a `_wo` suffix, which
+//     upjet renders as a `Wo` suffix on a plain spec field. In practice they are
+//     secrets: provider-upjet-azure v2.7.0 has four fields named `…Wo`, on five
+//     resources — three admin/job passwords (administratorPasswordWo,
+//     administratorLoginPasswordWo, passwordWo) and the Key Vault Secret's
+//     valueWo — all secret. So under a forProvider / initProvider key, at any
+//     depth and through lists or objects, the whole non-null value of a field
+//     whose name ends in `Wo` is replaced. This is a naming convention
+//     with one meaning, not a guess from a word like "password"; the numeric
+//     `…WoVersion` companion does not end in `Wo` and is left alone. The rule is
+//     keyed on location, not kind: a write-only value held anywhere else — the
+//     XR/claim spec field a composition patches it from, or an inline template
+//     string — is returned as written.
 //
 // Nothing else is touched: a ConfigMap's data is returned as written, and so are
 // the *SecretRef / writeConnectionSecretToRef fields that NAME a secret, since
@@ -77,12 +83,10 @@ func redactWalk(v any, providerArgs bool) any {
 				out[k] = redactSecretValues(val)
 			case k == "metadata":
 				out[k] = redactLastApplied(redactWalk(val, providerArgs))
-			case providerArgs && isWriteOnlyArg(k):
-				if _, isString := val.(string); isString {
-					out[k] = redactedMarker
-				} else {
-					out[k] = redactWalk(val, providerArgs)
-				}
+			case providerArgs && isWriteOnlyArg(k) && val != nil:
+				// Whole value, whatever its type: walking a list or map of
+				// secrets would return its strings unchanged.
+				out[k] = redactedMarker
 			case k == "forProvider" || k == "initProvider":
 				out[k] = redactWalk(val, true)
 			default:
@@ -102,16 +106,12 @@ func redactWalk(v any, providerArgs bool) any {
 }
 
 // isWriteOnlyArg reports whether name is upjet's rendering of a Terraform
-// write-only argument: a camelCase name ending in "Wo", e.g. valueWo,
-// administratorPasswordWo. The character before "Wo" must be lower-case or a
-// digit, so the suffix starts a new camelCase word rather than finishing one.
+// write-only argument: a name ending in the camelCase word "Wo", e.g. valueWo,
+// administratorPasswordWo. A capital W always starts a new camelCase word, so no
+// check on the character before it is needed — an earlier one only rejected
+// names like fooIDWo. "…WoVersion" does not end in "Wo" and is never matched.
 func isWriteOnlyArg(name string) bool {
-	n := len(name)
-	if n < 3 || name[n-2:] != "Wo" {
-		return false
-	}
-	c := name[n-3]
-	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+	return len(name) > 2 && strings.HasSuffix(name, "Wo")
 }
 
 // isSecretManifest reports whether m is a core Secret manifest. Any
@@ -138,7 +138,7 @@ func isSecretManifest(m map[string]any) bool {
 		return true // no group: the core group
 	}
 	group, _, _ := strings.Cut(s, "/")
-	return strings.EqualFold(group, "core")
+	return group == "" || strings.EqualFold(group, "core")
 }
 
 // redactLastApplied replaces the last-applied annotation in md, in place, and

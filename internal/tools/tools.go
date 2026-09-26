@@ -273,9 +273,11 @@ type GetResourceInput struct {
 // field here can carry them. TestSecretContentsNeverReturned pins that, and a
 // populated raw-object field would fail it.
 //
-// Spec is returned as-is, with one exception: a Secret manifest EMBEDDED in it
-// (a provider-kubernetes Object's manifest, a Composition base) is redacted by
-// redactEmbeddedSecrets before it gets here — see redact.go, including what
+// Spec is returned as-is except for three structural redactions applied by
+// redactEmbeddedSecrets before it gets here — a Secret manifest EMBEDDED in it
+// (a provider-kubernetes Object's manifest, a Composition base), kubectl's
+// last-applied-configuration on any object inside it, and Terraform write-only
+// arguments (…Wo) under forProvider/initProvider. See redact.go, including what
 // that deliberately does not cover (free-form and string-valued fields).
 // ResourceView has no status field, which is also what keeps a
 // provider-kubernetes Object's status.atProvider.manifest (a mirror of the live
