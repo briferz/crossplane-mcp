@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/briferz/crossplane-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/briferz/crossplane-mcp/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/briferz/crossplane-mcp.svg)](https://pkg.go.dev/github.com/briferz/crossplane-mcp)
-[![Go Report Card](https://goreportcard.com/badge/github.com/briferz/crossplane-mcp)](https://goreportcard.com/report/github.com/briferz/crossplane-mcp)
+[![golangci-lint](https://img.shields.io/github/check-runs/briferz/crossplane-mcp/main?nameFilter=golangci-lint&label=golangci-lint)](https://github.com/briferz/crossplane-mcp/actions/workflows/ci.yml?query=branch%3Amain)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
 A **read-only diagnostic MCP server for Crossplane.** It gives an AI assistant
