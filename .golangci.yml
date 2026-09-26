@@ -11,7 +11,16 @@ linters:
     - bodyclose
     - forbidigo
     - revive
+    - gocyclo
   settings:
+    gocyclo:
+      # Reports functions ABOVE this. golangci's default is 30 (and nothing here
+      # reached it); Go Report Card uses 15. 20 is where splitting paid for
+      # itself: Diagnose/BuildPackages (30) and skewSentences (23) were split
+      # into named helpers, while the 16-18s -- the parallel-walk window, the
+      # discovery lookup, the TF blob decoder, BuildUnhealthy -- read as one
+      # piece and were left alone.
+      min-complexity: 20
     forbidigo:
       # Match the type-checked identity of the call rather than the source text:
       # a plain regex would fire on strings.Replace / gzip.NewReader and would
@@ -39,3 +48,11 @@ linters:
         - pattern: '^dynamic\.(Namespaceable)?ResourceInterface\.(Create|Update|UpdateStatus|Delete|DeleteCollection|Patch|Apply|ApplyStatus)$'
           pkg: '^k8s\.io/client-go/dynamic$'
           msg: "crossplane-mcp is read-only: only get/list/watch may ever be issued against the cluster (CLAUDE.md hard rule 1)."
+  exclusions:
+    rules:
+      # A test's branches are its assertions (if got != want { t.Errorf }), so
+      # cyclomatic complexity measures how much it checks, not how hard it is to
+      # follow.
+      - path: _test\.go
+        linters:
+          - gocyclo
