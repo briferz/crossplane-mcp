@@ -106,10 +106,37 @@ notices. See `test/e2e/README.md`.
 3. **No secret contents in output.** Report connection-secret presence/status
    only, never values. Precise scope: a Secret referenced by an XR *is* fetched
    during a tree walk like any other node — the promise is about what leaves the
-   process, not what it reads. It holds because the output structs are closed
-   projections (`ResourceView` carries `spec`, and a core/v1 Secret has none);
-   `TestSecretContentsNeverReturned` pins that, so a future raw-object field
-   fails there rather than silently disclosing.
+   process, not what it reads. Two mechanisms hold it, and both are needed:
+   - **Closed projections.** Output structs are named fields, never raw
+     objects, and a core/v1 Secret keeps `data`/`stringData` at top level,
+     outside the `spec` that `ResourceView` returns.
+   - **Embedded-manifest redaction** (`internal/tools/redact.go`). `spec` is
+     returned as-is, and some kinds EMBED a whole Secret manifest in it — a
+     provider-kubernetes `Object`'s `spec.forProvider.manifest`, a
+     patch-and-transform Composition base. The closed projection alone leaked
+     those values through `get_resource`, and this rule's earlier wording
+     claimed otherwise. Any core Secret manifest anywhere inside `spec` now keeps
+     its `data`/`stringData` **keys** (presence) with every value — and its
+     kubectl last-applied annotation — replaced by `[redacted]`. It is lenient
+     about spelling (`core/v1`, a padded or missing apiVersion: the apiserver
+     rejects those, but the plaintext still sits in the failing object's spec)
+     and strict about group. Precise: a ConfigMap's data and the `*SecretRef` /
+     `writeConnectionSecretToRef` fields that *name* a secret are untouched.
+   - **No `status` in any output.** A provider-kubernetes `Object`'s
+     `status.atProvider.manifest` mirrors the live Secret; it stays out only
+     because `ResourceView` has no status field. Exposing status needs the same
+     redaction — the test fixture carries that field so it would fail first.
+   `TestSecretContentsNeverReturned` pins all of it. **Residual channels,
+   deliberately:** (1) any free-form or string-valued field is returned as
+   written — Helm `values` and `set[]`, Terraform Workspace `vars`/inline
+   module, env values, and function-go-templating / KCL inline templates, which
+   are YAML *strings* (so templated compositions are not covered). Key-name
+   masking is not the answer: key names don't mark payloads (`username`,
+   `tls.key`, `.dockerconfigjson`) and it would blank naming fields like
+   `secretName`. Keeping secrets out of free-form fields is the author's job
+   (`valuesFrom` / secretRef), as `sensitive` is for Terraform. (2) Provider
+   error text in conditions/events/`decodedErrors` is surfaced verbatim by
+   decision, because it is actionable.
 4. **Token-light output.** Prune `managedFields` / noisy annotations; return only
    failing conditions/events by default. Never re-introduce truncation of
    condition messages (the whole point over `crossplane resource trace`).

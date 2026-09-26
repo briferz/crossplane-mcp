@@ -47,6 +47,9 @@ func safetyClient() *k8s.Client {
 		{GroupVersion: "s3.aws.upbound.io/v1beta1", APIResources: []metav1.APIResource{
 			{Name: "buckets", SingularName: "bucket", Kind: "Bucket", Namespaced: true, Categories: []string{"managed"}},
 		}},
+		{GroupVersion: "kubernetes.crossplane.io/v1alpha2", APIResources: []metav1.APIResource{
+			{Name: "objects", SingularName: "object", Kind: "Object", Namespaced: false, Categories: []string{"managed"}},
+		}},
 		{GroupVersion: "v1", APIResources: []metav1.APIResource{
 			{Name: "secrets", SingularName: "secret", Kind: "Secret", Namespaced: true},
 			{Name: "events", SingularName: "event", Kind: "Event", Namespaced: true},
@@ -72,13 +75,42 @@ func safetyClient() *k8s.Client {
 		"stringData": map[string]any{"username": fixtureStringValue},
 	}}
 
+	// A provider-kubernetes Object whose managed manifest is a Secret: the
+	// Secret's values sit inside the Object's own spec, which get_resource
+	// returns. This is how hard rule 3 leaked before spec was redacted.
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kubernetes.crossplane.io/v1alpha2",
+		"kind":       "Object",
+		"metadata":   map[string]any{"name": "db-creds-object"},
+		"spec": map[string]any{
+			"forProvider": map[string]any{"manifest": map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Secret",
+				"metadata":   map[string]any{"name": "db-creds", "namespace": "team-a"},
+				"data":       map[string]any{"password": fixtureDataValue},
+				"stringData": map[string]any{"username": fixtureStringValue},
+			}},
+			"writeConnectionSecretToRef": map[string]any{"name": "db-creds-conn", "namespace": "team-a"},
+		},
+		// provider-kubernetes mirrors the LIVE object here, data included. It is
+		// safe only because ResourceView returns no status. Kept in the fixture
+		// so that exposing status later, without redacting it, fails the leak
+		// test instead of shipping.
+		"status": map[string]any{"atProvider": map[string]any{"manifest": map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"data":       map[string]any{"password": fixtureDataValue},
+		}}},
+	}}
+
 	gvrToListKind := map[schema.GroupVersionResource]string{
-		{Group: "apps.example.org", Version: "v1", Resource: "xapps"}:         "XAppList",
-		{Group: "s3.aws.upbound.io", Version: "v1beta1", Resource: "buckets"}: "BucketList",
-		{Group: "", Version: "v1", Resource: "secrets"}:                       "SecretList",
-		{Group: "", Version: "v1", Resource: "events"}:                        "EventList",
+		{Group: "kubernetes.crossplane.io", Version: "v1alpha2", Resource: "objects"}: "ObjectList",
+		{Group: "apps.example.org", Version: "v1", Resource: "xapps"}:                 "XAppList",
+		{Group: "s3.aws.upbound.io", Version: "v1beta1", Resource: "buckets"}:         "BucketList",
+		{Group: "", Version: "v1", Resource: "secrets"}:                               "SecretList",
+		{Group: "", Version: "v1", Resource: "events"}:                                "EventList",
 	}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind, xr, bucket, sec)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind, xr, bucket, sec, obj)
 	return &k8s.Client{Dyn: dyn, Disco: disco, Mapper: errMapper{}}
 }
 
@@ -218,11 +250,13 @@ func registeredToolNames(t *testing.T) []string {
 	return out
 }
 
-// TestSecretContentsNeverReturned pins the projection that makes the no-Secret-
-// contents promise true. It holds today only because ResourceView reads `spec`
-// and a core/v1 Secret has none — a coincidence of field naming that nothing
-// else tests. Adding a raw-object or `data` field would turn a still-advertised
-// promise into a live disclosure; this fails first.
+// TestSecretContentsNeverReturned pins both mechanisms behind the no-Secret-
+// contents promise. For a Secret fetched directly, the closed projection: a
+// core/v1 Secret has no spec, so ResourceView carries none of its payload. For a
+// Secret EMBEDDED in another resource's spec — which the projection alone used
+// to leak — structural redaction. Adding a raw-object, status or data field
+// would turn a still-advertised promise into a live disclosure; this fails first
+// (the Object fixture carries status.atProvider.manifest for exactly that).
 func TestSecretContentsNeverReturned(t *testing.T) {
 	leaks := func(t *testing.T, label string, v any) {
 		t.Helper()
@@ -258,6 +292,27 @@ func TestSecretContentsNeverReturned(t *testing.T) {
 		for _, k := range []string{"data", "stringData"} {
 			if _, present := top[k]; present {
 				t.Errorf("ResourceView must not carry a %q field", k)
+			}
+		}
+	})
+
+	t.Run("get_resource_embedded_secret_manifest", func(t *testing.T) {
+		cl := safetyClient()
+		_, view, err := getResourceHandler(cl)(context.Background(), nil, GetResourceInput{
+			APIVersion: "kubernetes.crossplane.io/v1alpha2", Kind: "Object", Name: "db-creds-object"})
+		if err != nil {
+			t.Fatalf("get_resource on an Object: %v", err)
+		}
+		// Assert the manifest really came back, so the leak check is not vacuous.
+		b, _ := json.Marshal(view)
+		if !strings.Contains(string(b), `"manifest"`) || !strings.Contains(string(b), "db-creds") {
+			t.Fatalf("expected the Object's spec with its manifest, got %s", b)
+		}
+		leaks(t, "get_resource (embedded Secret manifest)", view)
+		// Presence survives: the keys, and the ref naming the connection secret.
+		for _, want := range []string{`"password"`, `"username"`, "db-creds-conn"} {
+			if !strings.Contains(string(b), want) {
+				t.Errorf("presence information %s was lost: %s", want, b)
 			}
 		}
 	})
