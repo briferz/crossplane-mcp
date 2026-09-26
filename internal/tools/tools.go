@@ -68,7 +68,8 @@ func Register(s *mcp.Server, cl *k8s.Client, rec *Recorder) {
 			"paused (crossplane.io/paused) and, while the resource is terminating, its " +
 			"deletionTimestamp + finalizers. A Secret manifest embedded in spec (e.g. a " +
 			"provider-kubernetes Object's manifest) has its data/stringData values shown as " +
-			"\"[redacted]\" — the keys are real, the values are not.",
+			"\"[redacted]\", as do Terraform write-only arguments such as valueWo — the keys " +
+			"are real, the values are not.",
 	}, recorded(rec, "get_resource", getResourceHandler(cl)))
 
 	mcp.AddTool(s, &mcp.Tool{

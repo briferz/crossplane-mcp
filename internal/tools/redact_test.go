@@ -163,3 +163,119 @@ func TestRedactDoesNotMutateInputLists(t *testing.T) {
 		t.Error("redaction wrote through a list into its input")
 	}
 }
+
+// Precision over a realistic, secret-free spec: lists, nested lists, scalars in
+// lists, refs. Absence-only checks cannot catch a walk that DROPS content — a
+// mutation that emptied every list passed the whole suite until this existed.
+func TestRedactKeepsSecretFreeSpecIdentical(t *testing.T) {
+	spec := map[string]any{
+		"forProvider": map[string]any{
+			"region": "eu-west-1",
+			"tags":   []any{"a", "b"},
+			"rules":  []any{map[string]any{"port": int64(443), "cidrs": []any{"10.0.0.0/8"}}},
+		},
+		"references": []any{map[string]any{"patchesFrom": map[string]any{"name": "cfg"}}},
+		"resources": []any{map[string]any{"base": map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "c", "labels": map[string]any{"app": "x"}},
+			"data":     map[string]any{"k": "v"},
+		}}},
+		"writeConnectionSecretToRef": map[string]any{"name": "conn"},
+	}
+	if got := redactEmbeddedSecrets(spec); !reflect.DeepEqual(got, spec) {
+		t.Errorf("a spec with nothing secret in it must come back unchanged\n got: %v\nwant: %v", got, spec)
+	}
+}
+
+// Every spelling the core group can take, including the ones the apiserver
+// rejects: plaintext in a failing object's spec is still plaintext.
+func TestRedactCoreGroupSpellings(t *testing.T) {
+	for _, av := range []any{"V1", "v1beta1", "", "Core/v1", nil, 1} {
+		m := secretManifest()
+		m["apiVersion"] = av // explicit null and a non-string included deliberately
+		t.Run(fmt.Sprintf("apiVersion=%v", av), func(t *testing.T) {
+			mustNotLeak(t, redactEmbeddedSecrets(map[string]any{"manifest": m}))
+		})
+	}
+}
+
+func TestRedactSecretKindAndPayloadKeyCase(t *testing.T) {
+	for _, kind := range []string{"secret", " Secret ", "SECRET"} {
+		m := secretManifest()
+		m["kind"] = kind
+		t.Run("kind="+kind, func(t *testing.T) {
+			mustNotLeak(t, redactEmbeddedSecrets(map[string]any{"manifest": m}))
+		})
+	}
+	t.Run("Data key", func(t *testing.T) {
+		m := secretManifest()
+		m["Data"] = m["data"]
+		delete(m, "data")
+		mustNotLeak(t, redactEmbeddedSecrets(map[string]any{"manifest": m}))
+	})
+}
+
+// A provider-kubernetes Object pasted from `kubectl get -o yaml` into a
+// Composition base: the OBJECT's last-applied annotation duplicates the Secret
+// it embeds, one level above the Secret itself.
+func TestRedactLastAppliedOnTheEmbeddingObject(t *testing.T) {
+	spec := map[string]any{"resources": []any{map[string]any{"base": map[string]any{
+		"apiVersion": "kubernetes.crossplane.io/v1alpha2",
+		"kind":       "Object",
+		"metadata": map[string]any{"annotations": map[string]any{
+			lastAppliedAnnotation: `{"spec":{"forProvider":{"manifest":{"kind":"Secret","data":{"password":"` + fixtureDataValue + `"}}}}}`,
+			"team":                "payments",
+		}},
+		"spec": map[string]any{"forProvider": map[string]any{"manifest": secretManifest()}},
+	}}}}
+	out := mustNotLeak(t, redactEmbeddedSecrets(spec))
+	if !strings.Contains(out, "payments") {
+		t.Errorf("unrelated annotations must survive: %s", out)
+	}
+}
+
+func TestRedactDoesNotMutateInputAnnotations(t *testing.T) {
+	ann := map[string]any{lastAppliedAnnotation: "orig"}
+	m := secretManifest()
+	m["metadata"] = map[string]any{"annotations": ann}
+	_ = redactEmbeddedSecrets(map[string]any{"manifest": m})
+	if ann[lastAppliedAnnotation] != "orig" {
+		t.Error("redaction wrote the marker into the input's annotation map")
+	}
+}
+
+// Terraform write-only arguments, as upjet renders them. provider-upjet-azure
+// v2.7.0 ships a Key Vault Secret whose value is spec.forProvider.valueWo and a
+// PostgreSQL server whose admin password is administratorPasswordWo — plain
+// strings, secret by definition.
+func TestRedactWriteOnlyArguments(t *testing.T) {
+	spec := map[string]any{
+		"forProvider": map[string]any{
+			"valueWo":        fixtureDataValue,
+			"valueWoVersion": int64(1), // a number: the trigger, not the secret
+			"keyVaultId":     "/subscriptions/x",
+		},
+		"initProvider": map[string]any{
+			"nested": map[string]any{"administratorPasswordWo": fixtureStringValue},
+		},
+		// Outside forProvider/initProvider there are no Terraform arguments.
+		"notesWo": "left alone",
+	}
+	out := mustNotLeak(t, redactEmbeddedSecrets(spec))
+
+	for _, keep := range []string{`"valueWoVersion":1`, "/subscriptions/x", "left alone"} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("%s must survive: %s", keep, out)
+		}
+	}
+	for _, name := range []string{"valueWo", "administratorPasswordWo", "p9Wo"} {
+		if !isWriteOnlyArg(name) {
+			t.Errorf("%s is a write-only argument name", name)
+		}
+	}
+	for _, name := range []string{"Wo", "slotTwo", "valueWoVersion", "WORKLOAD"} {
+		if isWriteOnlyArg(name) {
+			t.Errorf("%s is not a write-only argument name", name)
+		}
+	}
+}

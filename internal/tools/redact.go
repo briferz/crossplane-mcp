@@ -13,61 +13,87 @@ import "strings"
 // object it manages, and a Composition, whose resource bases can be Secrets.
 // Without this, get_resource on such an object returned the Secret's values.
 //
-// The redaction is structural, not a guess. Any object anywhere inside spec that
-// is a core Secret manifest (see isSecretManifest — lenient about spelling, strict
-// about group) keeps its data/stringData KEYS, so presence stays visible, which
-// is what the rule asks to report, while every value is replaced, as is its
-// kubectl last-applied annotation, which holds a JSON copy of the same data.
+// The redaction is structural, not a guess — it matches object shape and schema
+// conventions, never the content of a value. Three things are redacted:
+//
+//   - Embedded Secret manifests. Any object anywhere inside spec that is a core
+//     Secret (isSecretManifest) keeps its data/stringData KEYS — presence, which
+//     is what the rule asks to report — while every value is replaced.
+//   - kubectl's last-applied-configuration annotation, on ANY object inside
+//     spec. It is a JSON copy of that object: on a Secret it duplicates the data,
+//     and on an object that embeds a Secret (a provider-kubernetes Object pasted
+//     into a Composition base) it duplicates the embedded Secret. It adds nothing
+//     diagnostic, since the object it copies is right there.
+//   - Terraform write-only arguments. Terraform marks arguments that carry a
+//     secret the provider must never persist with a `_wo` suffix, and upjet
+//     renders them into managed resources as plain string fields with a `Wo`
+//     suffix — provider-upjet-azure's Key Vault Secret `valueWo` and PostgreSQL
+//     `administratorPasswordWo`, shipped in v2.7.0. They are secret by
+//     definition, so under spec.forProvider / spec.initProvider a string field
+//     whose name ends in `Wo` at a camelCase boundary is replaced. This is a
+//     schema convention with one defined meaning, not a guess from a word like
+//     "password"; its `…WoVersion` companion is a number and is left alone.
+//
 // Nothing else is touched: a ConfigMap's data is returned as written, and so are
 // the *SecretRef / writeConnectionSecretToRef fields that NAME a secret, since
 // naming it is exactly the presence information the rule wants surfaced.
 //
-// Deliberately NOT done: masking values by key name (password, token, …). Key
-// names do not mark secret payloads — username, tls.key and .dockerconfigjson
-// would all slip through — and scalar naming fields such as secretName would be
-// blanked. It is also the heuristic live-output scrubbing this project decided
-// against for provider error text (the --log-file recorder does mask by key name,
-// scalars only, where false positives cost less).
+// Deliberately NOT done: masking values by ordinary key names (password, token,
+// …). Key names do not mark secret payloads — username, tls.key and
+// .dockerconfigjson would all slip through — and scalar naming fields such as
+// secretName would be blanked. It is also the heuristic live-output scrubbing
+// this project decided against for provider error text (the --log-file recorder
+// does mask by key name, scalars only, where false positives cost less).
 //
 // Residual channels, returned as written:
 //   - any free-form or string-valued field: a Helm Release's values and set[]
 //     pairs, a provider-terraform Workspace's vars and inline module, a Pod's
 //     env values, and — the common case in Crossplane v2 — function-go-templating
 //     and KCL inline templates, which are YAML STRINGS and are not parsed. So
-//     "a Composition's resource bases" is covered for patch-and-transform bases,
-//     not for templated ones. Keeping secrets out of these is the author's job,
-//     and the machinery exists (valuesFrom / secretRef, so spec carries a ref);
+//     patch-and-transform Composition bases are covered and templated ones are
+//     not. Keeping secrets out of these is the author's job, and the machinery
+//     exists (valuesFrom / secretRef, so spec carries a ref);
 //   - provider error text in conditions, events and decodedErrors, surfaced
 //     verbatim by an explicit project decision, because it is actionable.
 
-// lastAppliedAnnotation holds kubectl's JSON copy of the whole object — for a
-// Secret manifest pasted from `kubectl get secret -o yaml`, that includes data.
+// lastAppliedAnnotation holds kubectl's JSON copy of the whole object.
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 
-// redactEmbeddedSecrets returns a copy of v in which every embedded core/v1
-// Secret manifest has its data/stringData values, and its last-applied
-// annotation, replaced. v is never mutated — not its maps, not its lists: it is
-// the fetched object's own spec.
-func redactEmbeddedSecrets(v any) any {
+// redactEmbeddedSecrets returns a redacted copy of v (see the package notes
+// above). v is never mutated — not its maps, not its lists, not its
+// annotations: it is the fetched object's own spec.
+func redactEmbeddedSecrets(v any) any { return redactWalk(v, false) }
+
+// redactWalk carries whether it is inside forProvider/initProvider, where
+// Terraform write-only arguments live.
+func redactWalk(v any, providerArgs bool) any {
 	switch t := v.(type) {
 	case map[string]any:
 		secret := isSecretManifest(t)
 		out := make(map[string]any, len(t))
 		for k, val := range t {
 			switch {
-			case secret && (k == "data" || k == "stringData"):
+			case secret && (strings.EqualFold(k, "data") || strings.EqualFold(k, "stringData")):
 				out[k] = redactSecretValues(val)
-			case secret && k == "metadata":
-				out[k] = redactLastApplied(val)
+			case k == "metadata":
+				out[k] = redactLastApplied(redactWalk(val, providerArgs))
+			case providerArgs && isWriteOnlyArg(k):
+				if _, isString := val.(string); isString {
+					out[k] = redactedMarker
+				} else {
+					out[k] = redactWalk(val, providerArgs)
+				}
+			case k == "forProvider" || k == "initProvider":
+				out[k] = redactWalk(val, true)
 			default:
-				out[k] = redactEmbeddedSecrets(val)
+				out[k] = redactWalk(val, providerArgs)
 			}
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, e := range t {
-			out[i] = redactEmbeddedSecrets(e)
+			out[i] = redactWalk(e, providerArgs)
 		}
 		return out
 	default:
@@ -75,58 +101,61 @@ func redactEmbeddedSecrets(v any) any {
 	}
 }
 
-// isSecretManifest reports whether m is a core Secret manifest. It is lenient
-// about spelling on purpose: the apiserver rejects "core/v1", a padded "v1" or a
-// missing apiVersion, so no Secret is ever created from them — but the
+// isWriteOnlyArg reports whether name is upjet's rendering of a Terraform
+// write-only argument: a camelCase name ending in "Wo", e.g. valueWo,
+// administratorPasswordWo. The character before "Wo" must be lower-case or a
+// digit, so the suffix starts a new camelCase word rather than finishing one.
+func isWriteOnlyArg(name string) bool {
+	n := len(name)
+	if n < 3 || name[n-2:] != "Wo" {
+		return false
+	}
+	c := name[n-3]
+	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// isSecretManifest reports whether m is a core Secret manifest. Any
+// apiVersion without a group ("v1", "V1", "v1beta1" — the core group has no
+// name) or in the explicit "core/" group counts, as does a missing, null or
+// non-string apiVersion, and kind is matched case-insensitively. The apiserver
+// rejects most of those spellings, so no Secret is created from them — but the
 // plaintext still sits in the embedding object's spec, and a failing object is
 // exactly what someone debugs with this tool. A Secret-named kind in any OTHER
-// group is left alone: that is a different API, and the Secret-shaped CRDs in
-// the Crossplane ecosystem carry values through *SecretRef fields instead.
+// group is left alone: that is a different API.
 func isSecretManifest(m map[string]any) bool {
 	kind, _ := m["kind"].(string)
 	if !strings.EqualFold(strings.TrimSpace(kind), "Secret") {
 		return false
 	}
-	av, present := m["apiVersion"]
-	if !present || av == nil {
-		return true
-	}
-	s, ok := av.(string)
+	// Missing, null and non-string apiVersions all land here: none is a valid
+	// apiVersion, so err towards redacting.
+	s, ok := m["apiVersion"].(string)
 	if !ok {
-		return true // not a valid apiVersion at all; err towards redacting
-	}
-	switch strings.TrimSpace(s) {
-	case "", "v1", "core/v1":
 		return true
 	}
-	return false
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "/") {
+		return true // no group: the core group
+	}
+	group, _, _ := strings.Cut(s, "/")
+	return strings.EqualFold(group, "core")
 }
 
-// redactLastApplied copies a Secret manifest's metadata, replacing only the
-// last-applied annotation. Every other annotation and field is left readable:
-// names and labels are presence information, not payload.
-func redactLastApplied(v any) any {
-	md, ok := v.(map[string]any)
-	if !ok {
-		return v
-	}
-	out := make(map[string]any, len(md))
-	for k, val := range md {
-		out[k] = val
-	}
-	ann, ok := md["annotations"].(map[string]any)
-	if !ok {
-		return out
-	}
-	if _, has := ann[lastAppliedAnnotation]; has {
-		copied := make(map[string]any, len(ann))
-		for k, val := range ann {
-			copied[k] = val
+// redactLastApplied replaces the last-applied annotation in md, in place, and
+// leaves every other annotation and field readable: names and labels are
+// presence information, not payload. In place is safe because its only caller
+// passes redactWalk's output, which is already a fresh copy of the input — a
+// second copy here was dead code, which mutation testing surfaced as a
+// "survivor" no test could ever kill.
+func redactLastApplied(md any) any {
+	if m, ok := md.(map[string]any); ok {
+		if ann, ok := m["annotations"].(map[string]any); ok {
+			if _, has := ann[lastAppliedAnnotation]; has {
+				ann[lastAppliedAnnotation] = redactedMarker
+			}
 		}
-		copied[lastAppliedAnnotation] = redactedMarker
-		out["annotations"] = copied
 	}
-	return out
+	return md
 }
 
 // redactSecretValues keeps a Secret payload's keys and replaces every value with
