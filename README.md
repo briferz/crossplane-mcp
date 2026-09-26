@@ -265,11 +265,16 @@ Disable all three with `--log-redact=false` or `CROSSPLANE_MCP_LOG_REDACT=false`
 > Terraform/OpenTofu config. What gets logged is the same closed projections the
 > tools return — built from a resource's metadata, spec, status, and events, never
 > the raw object — so a Secret's own `data`/`stringData` never reaches the log.
-> One redaction does apply to the live response as well: a Secret manifest
-> *embedded* in another resource's `spec` (a provider-kubernetes `Object`, a
-> Composition base) has its values replaced with `[redacted]`, keys kept. Other
-> free-form fields — Helm `values`, Terraform `vars`, templating functions'
-> inline templates — are returned and logged as written. (A Secret composed by an
+> Three structural redactions apply to the live response as well, in
+> `get_resource`'s `spec`: a Secret manifest *embedded* in another resource (a
+> provider-kubernetes `Object`, a Composition base) has its values replaced with
+> `[redacted]`, keys kept; so do Terraform write-only arguments such as
+> provider-upjet-azure's `valueWo`, and kubectl's `last-applied-configuration`
+> copy of any embedded object. The write-only rule is keyed on location (under
+> `forProvider`/`initProvider`), so the XR or claim field a value is patched in
+> from is still returned as written. Other free-form fields — Helm `values`, Terraform
+> `vars`, templating functions' inline templates — are returned as written, and
+> reach the log subject only to the best-effort masks above. (A Secret composed by an
 > XR is still fetched during a tree walk, like any other node; only its contents
 > are withheld.) Treat the log
 > as potentially sensitive and **review it before sharing off a machine that

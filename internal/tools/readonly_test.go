@@ -47,6 +47,9 @@ func safetyClient() *k8s.Client {
 		{GroupVersion: "s3.aws.upbound.io/v1beta1", APIResources: []metav1.APIResource{
 			{Name: "buckets", SingularName: "bucket", Kind: "Bucket", Namespaced: true, Categories: []string{"managed"}},
 		}},
+		{GroupVersion: "keyvault.azure.upbound.io/v1beta1", APIResources: []metav1.APIResource{
+			{Name: "secrets", SingularName: "secret", Kind: "Secret", Namespaced: false, Categories: []string{"managed"}},
+		}},
 		{GroupVersion: "kubernetes.crossplane.io/v1alpha2", APIResources: []metav1.APIResource{
 			{Name: "objects", SingularName: "object", Kind: "Object", Namespaced: false, Categories: []string{"managed"}},
 		}},
@@ -91,6 +94,9 @@ func safetyClient() *k8s.Client {
 				"stringData": map[string]any{"username": fixtureStringValue},
 			}},
 			"writeConnectionSecretToRef": map[string]any{"name": "db-creds-conn", "namespace": "team-a"},
+			// A list that holds no secret: it must come back intact, which an
+			// absence-only leak check cannot see.
+			"references": []any{map[string]any{"patchesFrom": map[string]any{"name": "cfg-ref"}}},
 		},
 		// provider-kubernetes mirrors the LIVE object here, data included. It is
 		// safe only because ResourceView returns no status. Kept in the fixture
@@ -103,14 +109,30 @@ func safetyClient() *k8s.Client {
 		}}},
 	}}
 
+	// An Azure Key Vault Secret managed resource. Its kind is literally "Secret",
+	// but in another API group, so it is NOT a core Secret manifest; its secret
+	// value is spec.forProvider.valueWo — a Terraform write-only argument that
+	// upjet renders as a plain string (provider-upjet-azure v2.7.0).
+	kv := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "keyvault.azure.upbound.io/v1beta1",
+		"kind":       "Secret",
+		"metadata":   map[string]any{"name": "app-key"},
+		"spec": map[string]any{"forProvider": map[string]any{
+			"name":           "app-key",
+			"valueWo":        fixtureDataValue,
+			"valueWoVersion": int64(1),
+		}},
+	}}
+
 	gvrToListKind := map[schema.GroupVersionResource]string{
+		{Group: "keyvault.azure.upbound.io", Version: "v1beta1", Resource: "secrets"}: "SecretList",
 		{Group: "kubernetes.crossplane.io", Version: "v1alpha2", Resource: "objects"}: "ObjectList",
 		{Group: "apps.example.org", Version: "v1", Resource: "xapps"}:                 "XAppList",
 		{Group: "s3.aws.upbound.io", Version: "v1beta1", Resource: "buckets"}:         "BucketList",
 		{Group: "", Version: "v1", Resource: "secrets"}:                               "SecretList",
 		{Group: "", Version: "v1", Resource: "events"}:                                "EventList",
 	}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind, xr, bucket, sec, obj)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind, xr, bucket, sec, obj, kv)
 	return &k8s.Client{Dyn: dyn, Disco: disco, Mapper: errMapper{}}
 }
 
@@ -310,10 +332,27 @@ func TestSecretContentsNeverReturned(t *testing.T) {
 		}
 		leaks(t, "get_resource (embedded Secret manifest)", view)
 		// Presence survives: the keys, and the ref naming the connection secret.
-		for _, want := range []string{`"password"`, `"username"`, "db-creds-conn"} {
+		for _, want := range []string{`"password"`, `"username"`, "db-creds-conn", "cfg-ref"} {
 			if !strings.Contains(string(b), want) {
 				t.Errorf("presence information %s was lost: %s", want, b)
 			}
+		}
+	})
+
+	t.Run("get_resource_terraform_write_only_argument", func(t *testing.T) {
+		cl := safetyClient()
+		_, view, err := getResourceHandler(cl)(context.Background(), nil, GetResourceInput{
+			APIVersion: "keyvault.azure.upbound.io/v1beta1", Kind: "Secret", Name: "app-key"})
+		if err != nil {
+			t.Fatalf("get_resource on a Key Vault Secret: %v", err)
+		}
+		b, _ := json.Marshal(view)
+		if !strings.Contains(string(b), `"valueWoVersion"`) {
+			t.Fatalf("expected the managed resource's forProvider back, got %s", b)
+		}
+		leaks(t, "get_resource (Terraform write-only argument)", view)
+		if !strings.Contains(string(b), `"valueWo"`) {
+			t.Errorf("the field's presence must survive, only its value is withheld: %s", b)
 		}
 	})
 

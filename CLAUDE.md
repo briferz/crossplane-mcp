@@ -106,37 +106,57 @@ notices. See `test/e2e/README.md`.
 3. **No secret contents in output.** Report connection-secret presence/status
    only, never values. Precise scope: a Secret referenced by an XR *is* fetched
    during a tree walk like any other node — the promise is about what leaves the
-   process, not what it reads. Two mechanisms hold it, and both are needed:
+   process, not what it reads. It holds by two mechanisms, kept deliberately
+   precise:
    - **Closed projections.** Output structs are named fields, never raw
      objects, and a core/v1 Secret keeps `data`/`stringData` at top level,
-     outside the `spec` that `ResourceView` returns.
-   - **Embedded-manifest redaction** (`internal/tools/redact.go`). `spec` is
-     returned as-is, and some kinds EMBED a whole Secret manifest in it — a
-     provider-kubernetes `Object`'s `spec.forProvider.manifest`, a
-     patch-and-transform Composition base. The closed projection alone leaked
-     those values through `get_resource`, and this rule's earlier wording
-     claimed otherwise. Any core Secret manifest anywhere inside `spec` now keeps
-     its `data`/`stringData` **keys** (presence) with every value — and its
-     kubectl last-applied annotation — replaced by `[redacted]`. It is lenient
-     about spelling (`core/v1`, a padded or missing apiVersion: the apiserver
-     rejects those, but the plaintext still sits in the failing object's spec)
-     and strict about group. Precise: a ConfigMap's data and the `*SecretRef` /
-     `writeConnectionSecretToRef` fields that *name* a secret are untouched.
-   - **No `status` in any output.** A provider-kubernetes `Object`'s
-     `status.atProvider.manifest` mirrors the live Secret; it stays out only
-     because `ResourceView` has no status field. Exposing status needs the same
-     redaction — the test fixture carries that field so it would fail first.
-   `TestSecretContentsNeverReturned` pins all of it. **Residual channels,
-   deliberately:** (1) any free-form or string-valued field is returned as
-   written — Helm `values` and `set[]`, Terraform Workspace `vars`/inline
-   module, env values, and function-go-templating / KCL inline templates, which
-   are YAML *strings* (so templated compositions are not covered). Key-name
-   masking is not the answer: key names don't mark payloads (`username`,
-   `tls.key`, `.dockerconfigjson`) and it would blank naming fields like
-   `secretName`. Keeping secrets out of free-form fields is the author's job
-   (`valuesFrom` / secretRef), as `sensitive` is for Terraform. (2) Provider
-   error text in conditions/events/`decodedErrors` is surfaced verbatim by
-   decision, because it is actionable.
+     outside the `spec` that `ResourceView` returns. No output carries raw
+     `status` either (conditions and a few named status fields, yes) — which is
+     what keeps a provider-kubernetes `Object`'s `status.atProvider.manifest`,
+     a mirror of the live Secret, out. Exposing raw status would need the same
+     redaction; the test fixture carries that field so it would fail first.
+   - **Structural redaction of `get_resource`'s `spec`**
+     (`internal/tools/redact.go`), which is otherwise returned as-is:
+     (a) any core Secret manifest embedded anywhere in it — a
+     provider-kubernetes `Object`'s manifest, a patch-and-transform
+     Composition base — keeps its `data`/`stringData` **keys** with every value
+     replaced by `[redacted]`. "Core" means any apiVersion with no group
+     (`v1`, `V1`, `v1beta1`), `core/…`, or a missing/non-string one; kind and
+     the payload keys match case-insensitively. The apiserver rejects most of
+     those spellings, but the plaintext still sits in the failing object's spec.
+     A Secret-named kind in any other group is a different API and is left
+     alone. (b) kubectl's `last-applied-configuration` annotation on ANY object
+     inside `spec` — it duplicates the object, including an embedded Secret one
+     level down. (c) **Terraform write-only arguments**: a provider's schema
+     marks arguments Terraform never persists to state or plan `WriteOnly:
+     true`; by provider convention they are named `…_wo`, which upjet renders as
+     a `Wo` suffix on a plain spec field. In practice they are secrets —
+     provider-upjet-azure v2.7.0 has four fields named `…Wo` on five resources:
+     three admin/job passwords and the Key Vault Secret's `valueWo`. Under a
+     `forProvider`/`initProvider` key, at any depth and through lists or
+     objects, the whole non-null value of a field ending in `Wo` is replaced; the numeric `…WoVersion` companion does not end in `Wo`. A
+     naming convention with one meaning, not key-name guessing.
+   - **Precise, on purpose** — a property of both, not a third mechanism. A
+     ConfigMap's data and the `*SecretRef` / `writeConnectionSecretToRef`
+     fields that *name* a secret are untouched — naming it is the presence the
+     rule asks for.
+   Pinned by `TestSecretContentsNeverReturned` (handler level: a direct Secret,
+   an `Object` embedding one, and a Key Vault `Secret` with `valueWo`) and the
+   unit tests in `redact_test.go` (spellings, last-applied, lists, immutability,
+   and a spec with nothing secret in it coming back identical).
+   **Residual channels, deliberately:** (1) any free-form or string-valued
+   field is returned as written — Helm `values` and `set[]`, Terraform
+   Workspace `vars`/inline module, env values, and function-go-templating / KCL
+   inline templates, which are YAML *strings* (so templated compositions are not
+   covered). Masking by ordinary key names is not the answer: key names don't
+   mark payloads (`username`, `tls.key`, `.dockerconfigjson`) and it would
+   blank naming fields like `secretName`. Keeping secrets out of free-form
+   fields is the author's job (`valuesFrom` / secretRef), as `sensitive` is for
+   Terraform. (2) Provider error text in conditions/events/`decodedErrors` is
+   surfaced verbatim by decision, because it is actionable. (3) The `Wo` rule
+   is keyed on location (under `forProvider`/`initProvider`), not kind: a
+   write-only value held elsewhere — the XR/claim spec field a composition
+   patches it from, or an inline template string — is returned as written.
 4. **Token-light output.** Prune `managedFields` / noisy annotations; return only
    failing conditions/events by default. Never re-introduce truncation of
    condition messages (the whole point over `crossplane resource trace`).

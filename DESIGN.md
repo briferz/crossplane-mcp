@@ -295,10 +295,14 @@ Large k8s objects wreck an LLM context. Defaults:
   returned; presence/status only). Pinned by `TestSecretContentsNeverReturned`,
   which fetches a core/v1 Secret both through `get_resource` and through the
   tree walk, AND a provider-kubernetes `Object` whose `spec` embeds a Secret
-  manifest, and asserts no Secret value reaches the response. Two mechanisms
-  hold it: closed projections (a Secret's own payload is outside every returned
-  field) and structural redaction of Secret manifests embedded in `spec`
-  (`internal/tools/redact.go`). Free-form fields are returned as written. Note the
+  manifest, and an Azure Key Vault `Secret` carrying the write-only `valueWo`,
+  and asserts no Secret value reaches the response. Two mechanisms hold it:
+  closed projections (a Secret's own payload is outside every returned field)
+  and structural redaction of `get_resource`'s `spec`
+  (`internal/tools/redact.go`) — embedded Secret manifests' values, kubectl's
+  `last-applied-configuration` on any object inside it, and Terraform
+  write-only (`…Wo`) arguments under `forProvider`/`initProvider`. Free-form
+  fields are returned as written. Note the
   precise scope: a Secret referenced by an XR *is* fetched like any other tree
   node — the guarantee is about what leaves the process, not what it reads.
 
