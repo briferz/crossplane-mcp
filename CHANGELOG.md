@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.5](https://github.com/briferz/crossplane-mcp/compare/v0.8.4...v0.8.5) (2026-09-26)
+
+
+### Bug Fixes
+
+* **tools:** redact Secret manifests embedded in get_resource's spec ([#89](https://github.com/briferz/crossplane-mcp/issues/89)) ([5df0054](https://github.com/briferz/crossplane-mcp/commit/5df005418d6e47c4380db005a681660a4eee7e86))
+* **tools:** redact Terraform write-only arguments, and close the remaining Secret bypasses ([#90](https://github.com/briferz/crossplane-mcp/issues/90)) ([1ec8b64](https://github.com/briferz/crossplane-mcp/commit/1ec8b64624077cf3ebd5cfbed29884f9e995d63d))
+* **tools:** report in-cluster mode correctly, and enable revive ([#87](https://github.com/briferz/crossplane-mcp/issues/87)) ([d496c73](https://github.com/briferz/crossplane-mcp/commit/d496c73a1420e5ad0418e7d37d8ab644c120544d))
+
 ## [0.8.4](https://github.com/briferz/crossplane-mcp/compare/v0.8.3...v0.8.4) (2026-09-24)
 
 
