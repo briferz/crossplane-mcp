@@ -53,8 +53,8 @@ func TestIsCompositionError(t *testing.T) {
 }
 
 func TestTopRecurringEvent(t *testing.T) {
-	any := func(k8s.Event) bool { return true }
-	if _, ok := topRecurringEvent(nil, any); ok {
+	matchAll := func(k8s.Event) bool { return true }
+	if _, ok := topRecurringEvent(nil, matchAll); ok {
 		t.Error("empty events should return ok=false")
 	}
 	events := []k8s.Event{
@@ -63,7 +63,7 @@ func TestTopRecurringEvent(t *testing.T) {
 		{Reason: "C", Count: 50, Last: "2026-01-01T00:02:00Z"}, // ties B on count, but newer
 		{Reason: "D", Count: 9, Last: "2026-01-01T00:03:00Z"},
 	}
-	if got, ok := topRecurringEvent(events, any); !ok || got.Reason != "C" {
+	if got, ok := topRecurringEvent(events, matchAll); !ok || got.Reason != "C" {
 		t.Errorf("expected highest-count, newest-tie event C, got %+v (ok=%v)", got, ok)
 	}
 
@@ -72,7 +72,7 @@ func TestTopRecurringEvent(t *testing.T) {
 		{Reason: "first", Count: 50, Last: "2026-01-01T00:00:00Z"},
 		{Reason: "second", Count: 50, Last: "2026-01-01T00:00:00Z"},
 	}
-	if got, _ := topRecurringEvent(tie, any); got.Reason != "first" {
+	if got, _ := topRecurringEvent(tie, matchAll); got.Reason != "first" {
 		t.Errorf("full tie should keep first by slice order, got %s", got.Reason)
 	}
 

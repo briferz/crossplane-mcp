@@ -10,6 +10,7 @@ linters:
     - gosec
     - bodyclose
     - forbidigo
+    - revive
   settings:
     forbidigo:
       # Match the type-checked identity of the call rather than the source text:
