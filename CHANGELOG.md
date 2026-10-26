@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.6](https://github.com/briferz/crossplane-mcp/compare/v0.8.5...v0.8.6) (2026-10-26)
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.3 and golang.org/x/net v0.61.0 to clear reachable vulnerabilities ([#97](https://github.com/briferz/crossplane-mcp/issues/97)) ([96ce93b](https://github.com/briferz/crossplane-mcp/commit/96ce93b193baf33e8415c471e5fad20c04a41ca0))
+
 ## [0.8.5](https://github.com/briferz/crossplane-mcp/compare/v0.8.4...v0.8.5) (2026-09-26)
 
 
