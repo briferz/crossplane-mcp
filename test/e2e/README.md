@@ -103,7 +103,8 @@ splitting the directories is what keeps it invisible until then.
 ## Version pinning
 
 `ENVTEST_K8S_VERSION` in the Makefile tracks the repo's `client-go` minor
-(currently `1.37.0` against `client-go v0.37.0`). Bump both together: testing
+(currently `1.37.0` against `client-go v0.37.1` — the minor is what must
+match, and setup-envtest publishes no 1.37.1 binaries yet). Bump both together: testing
 against a materially different apiserver than the one the client targets is how
 this tier would quietly stop meaning anything.
 

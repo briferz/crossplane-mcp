@@ -60,7 +60,7 @@ Setting either variable asserts a cluster exists: the tests then fail rather
 than skip, because a silent skip is how a tier stops running and nobody
 notices. See `test/e2e/README.md`.
 
-- **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`**.
+- **golangci-lint** must be run as **`go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0`**.
   A prebuilt golangci-lint binary built with an older Go *refuses* this module
   (go.mod targets go 1.27); building it from source with the local toolchain is
   required. CI does this; `make lint` assumes a v2 binary on PATH.
